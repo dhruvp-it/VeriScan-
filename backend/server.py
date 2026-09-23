@@ -18,6 +18,7 @@ from core.config import (
 from core.deps import now_iso
 from ingredients_db import parse_ingredients
 from routes.admin import router as admin_router
+from routes.admin_profile import router as admin_profile_router
 from routes.analytics import router as analytics_router
 from routes.auth import router as auth_router
 from routes.misc import router as misc_router
@@ -25,11 +26,13 @@ from routes.payments import router as payments_router
 from routes.products import router as products_router
 from routes.profile import router as profile_router
 from routes.stripe_payments import router as stripe_router
+from scheduler import start_scheduler
 
 app = FastAPI(title="VeriScan API")
 
 for router in (auth_router, profile_router, products_router, payments_router,
-               admin_router, misc_router, analytics_router, stripe_router):
+               admin_router, misc_router, analytics_router, stripe_router,
+               admin_profile_router):
     app.include_router(router, prefix="/api")
 
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -68,6 +71,8 @@ async def seed_database() -> None:
             "user_id": admin["id"], "free_month": datetime.now(timezone.utc).strftime("%Y-%m"),
             "free_used": 0, "purchased_balance": 0, "intro_used": 0, "subscribed": True,
         })
+    # Kick off background scheduler for trial reminders + monthly reports
+    start_scheduler()
 
 
 @app.on_event("shutdown")

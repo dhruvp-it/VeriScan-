@@ -26,6 +26,7 @@ class TrackEvent(BaseModel):
     barcode: Optional[str] = Field(default=None, max_length=32)
     retailer_id: Optional[str] = Field(default=None, max_length=32)
     category: Optional[str] = Field(default=None, max_length=32)
+    country: Optional[str] = Field(default=None, max_length=6)
 
 
 def _today() -> str:
@@ -33,7 +34,8 @@ def _today() -> str:
 
 
 async def record(event: str, *, barcode: Optional[str] = None,
-                 retailer_id: Optional[str] = None, category: Optional[str] = None) -> None:
+                 retailer_id: Optional[str] = None, category: Optional[str] = None,
+                 country: Optional[str] = None) -> None:
     """Callable from any router. Fire-and-forget style — never raises."""
     try:
         today = _today()
@@ -59,6 +61,22 @@ async def record(event: str, *, barcode: Optional[str] = None,
                                                         "category": category}},
                 upsert=True,
             )
+        # Category breakdown per event
+        if category:
+            cat_key = f"category:{category}"
+            await db.analytics_daily.update_one(
+                {**base, "key": cat_key},
+                {"$inc": {"count": 1}, "$setOnInsert": {**base, "key": cat_key, "category": category}},
+                upsert=True,
+            )
+        # Country breakdown per event
+        if country:
+            co_key = f"country:{country.upper()}"
+            await db.analytics_daily.update_one(
+                {**base, "key": co_key},
+                {"$inc": {"count": 1}, "$setOnInsert": {**base, "key": co_key, "country": country.upper()}},
+                upsert=True,
+            )
         # Cross-key for retailer click on a specific product
         if event == "retailer_click" and retailer_id and barcode:
             cross = f"retailer:{retailer_id}|barcode:{barcode}"
@@ -75,7 +93,8 @@ async def record(event: str, *, barcode: Optional[str] = None,
 @router.post("/analytics/track")
 async def track(payload: TrackEvent) -> Dict[str, str]:
     await record(payload.event, barcode=payload.barcode,
-                 retailer_id=payload.retailer_id, category=payload.category)
+                 retailer_id=payload.retailer_id, category=payload.category,
+                 country=payload.country)
     return {"status": "recorded"}
 
 
@@ -131,6 +150,33 @@ async def analytics_overview(days: int = 30, _: Dict[str, Any] = Depends(admin_u
     retailers = [{"retailer_id": row["_id"].split(":", 1)[1], "count": row["count"]}
                  for row in retailer_rows]
 
+    # Category breakdown across scans + retailer clicks
+    pipeline_categories = [
+        {"$match": {"date": {"$gte": start}, "key": {"$regex": "^category:"}}},
+        {"$group": {"_id": {"cat": "$key", "event": "$event"}, "count": {"$sum": "$count"}}},
+        {"$sort": {"count": -1}},
+    ]
+    cat_rows = await db.analytics_daily.aggregate(pipeline_categories).to_list(60)
+    categories: Dict[str, Dict[str, int]] = {}
+    for row in cat_rows:
+        cat = row["_id"]["cat"].split(":", 1)[1]
+        ev = row["_id"]["event"]
+        categories.setdefault(cat, {"scan": 0, "retailer_click": 0, "contribute": 0, "share": 0})
+        categories[cat][ev] = categories[cat].get(ev, 0) + row["count"]
+    category_list = [{"category": k, **v, "total": sum(v.values())}
+                     for k, v in categories.items()]
+    category_list.sort(key=lambda r: r["total"], reverse=True)
+
+    # Country breakdown across scans
+    pipeline_countries = [
+        {"$match": {"date": {"$gte": start}, "event": "scan", "key": {"$regex": "^country:"}}},
+        {"$group": {"_id": "$key", "count": {"$sum": "$count"}}},
+        {"$sort": {"count": -1}},
+    ]
+    country_rows = await db.analytics_daily.aggregate(pipeline_countries).to_list(60)
+    countries = [{"country": row["_id"].split(":", 1)[1], "count": row["count"]}
+                 for row in country_rows]
+
     totals = {
         "scan": sum(d["scan"] for d in daily.values()),
         "retailer_click": sum(d["retailer_click"] for d in daily.values()),
@@ -141,6 +187,7 @@ async def analytics_overview(days: int = 30, _: Dict[str, Any] = Depends(admin_u
         "days": days, "totals": totals,
         "daily": [{"date": d, **daily[d]} for d in dates],
         "top_products": top_products, "retailers": retailers,
+        "categories": category_list, "countries": countries,
     }
 
 

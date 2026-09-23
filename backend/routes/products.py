@@ -61,7 +61,7 @@ async def lookup_product(
     await db.history.insert_one({"id": str(uuid.uuid4()), "user_id": history_user,
                                   "product": result, "scanned_at": now_iso()})
     # Anonymous analytics — no user id / email / device id is stored
-    await record_analytics("scan", barcode=barcode, category=result.get("category"))
+    await record_analytics("scan", barcode=barcode, category=result.get("category"), country=country)
     return result
 
 

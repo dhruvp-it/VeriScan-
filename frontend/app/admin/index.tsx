@@ -17,6 +17,7 @@ const CARDS: { id: string; label: string; icon: keyof typeof Ionicons.glyphMap; 
   { id: "analytics", label: "Anonymous analytics", icon: "stats-chart-outline", path: "/admin/analytics" },
   { id: "pricing", label: "Country pricing", icon: "cash-outline", path: "/admin/pricing" },
   { id: "promos", label: "Promo codes", icon: "pricetag-outline", path: "/admin/promocodes" },
+  { id: "admin-profile", label: "Admin profile & security", icon: "person-circle-outline", path: "/admin/profile" },
 ];
 
 export default function AdminHome() {

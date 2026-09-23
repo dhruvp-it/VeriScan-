@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 9 full test pass: 20/20 backend pytest cases + all frontend UI checks. Admin profile self-service (GET, email change 2-OTP, phone change with SMS notice, wrong password/existing email/duplicate phone error paths) all work. Analytics category+country breakdown returns correct arrays, x-country header threading via /products/lookup writes country counter, monthly report manual trigger returns {sent: N} then idempotently {sent: 0}, scheduler._send_trial_reminders sends 1 reminder + is idempotent. Regression: /admin/users list+suspend+reactivate, pricing, promocodes, support, reports, payments, duplicates (flat list with kind/confidence), /products/compare deep_links, /payments/stripe/status?country=ZZ enabled=false all green. Frontend: /admin/profile guard 'Admin only' when unauthenticated; when authed as admin all 7 testIDs (admin-new-email, admin-password-email, admin-change-email-start, admin-new-phone, admin-password-phone, admin-change-phone-start, admin-send-report) render, current email + 'Not set' phone visible; /admin/analytics renders 'By category' and 'By country' sections; /admin index shows new 'Admin profile & security' card with testID admin-nav-admin-profile. No React Native deprecated packages detected in touched files.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_9_admin_profile.py",
+    "/app/test_reports/pytest/iteration_9.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "scheduler.py:143 sleep interval uses env VERISCAN_SCHEDULER_INTERVAL_SEC — good for tests. Consider adding a lock to _send_monthly_reports to prevent duplicate sends when multiple pods run.",
+    "analytics.py: record() is well-scoped and never raises. Category counter is correctly duplicated per event (scan+retailer_click), enabling per-event breakdowns.",
+    "admin_profile.py: OTP is stored plaintext in Mongo — acceptable given 15-min TTL, but for a launch-hard rollout consider hashing. Current password verification is correct (bcrypt.checkpw).",
+    "products.py: x_country header defaults to IN; correctly upper-cased before pricing lookup and analytics record. Good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_9_admin_profile.py (new file)"
+  ],
+  "success_rate": {
+    "backend": "100% (20/20)",
+    "frontend": "100% (all testIDs + sections rendered)"
+  },
+  "seed_data_creation": "Test-scoped ephemeral users prefixed veriscan-*@example.com were registered via /api/auth/register during regression tests. Analytics counters for barcode 8901030895001 with countries IN/US/DE and category food/supplement were incremented via /api/analytics/track and /api/products/lookup. Admin phone_number is left null (cleanup in test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration_9 tests live in /app/backend/tests/test_iteration_9_admin_profile.py and are safe to re-run — they self-cleanup admin phone_number and revert admin email after each mutating flow. Full backend regression suite (iter 4/5/6/7/8/9) runs cleanly in parallel. Frontend requires token injection into localStorage (key: veriscan_auth_token, JSON-stringified) since /auth/login route is not exposed — see script pattern used here. All Iter 9 requirements verified end-to-end.",
+  "rca_of_issue": "N/A — no bugs found."
+}

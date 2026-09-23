@@ -81,6 +81,41 @@ export default function AdminAnalyticsRoute() {
               ))
             )}
 
+            <Text style={styles.sectionTitle}>By category</Text>
+            {data.categories.length === 0 ? (
+              <Text style={styles.muted}>No category data yet.</Text>
+            ) : (
+              data.categories.map((row) => {
+                const max = data.categories[0]?.total || 1;
+                return (
+                  <View key={row.category} style={styles.retailerRow} testID={`analytics-category-${row.category}`}>
+                    <View style={styles.retailerIcon}>
+                      <Ionicons name={row.category === "food" ? "nutrition-outline" : row.category === "personal_care" ? "sparkles-outline" : "flask-outline"} size={16} color={colors.brandSecondary} />
+                    </View>
+                    <Text style={styles.retailerName}>{row.category.replace("_", " ")}</Text>
+                    <View style={styles.retailerBar}>
+                      <View style={[styles.retailerBarFill, { width: `${Math.min(100, (row.total / max) * 100)}%`, backgroundColor: colors.brandSecondary }]} />
+                    </View>
+                    <Text style={styles.retailerCount}>{row.total}</Text>
+                  </View>
+                );
+              })
+            )}
+
+            <Text style={styles.sectionTitle}>By country</Text>
+            {data.countries.length === 0 ? (
+              <Text style={styles.muted}>No country data yet — set the user's country header in-app to see this.</Text>
+            ) : (
+              <View style={styles.countriesGrid}>
+                {data.countries.map((row) => (
+                  <View key={row.country} style={styles.countryChip} testID={`analytics-country-${row.country}`}>
+                    <Text style={styles.countryCode}>{row.country}</Text>
+                    <Text style={styles.countryCount}>{row.count}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
             <Text style={styles.sectionTitle}>Top scanned products</Text>
             {data.top_products.length === 0 ? (
               <Text style={styles.muted}>No scans in the last 30 days.</Text>
@@ -167,6 +202,10 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   chartCol: { flex: 1, alignItems: "center", gap: 4 },
   chartBar: { width: "80%", borderRadius: 3, minHeight: 4 },
   chartLabel: { color: colors.muted, fontSize: 9 },
+  countriesGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 },
+  countryChip: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.surfaceSecondary, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 7 },
+  countryCode: { color: colors.onSurface, fontSize: 13, fontWeight: "800", letterSpacing: 0.4 },
+  countryCount: { color: colors.brandPrimary, fontSize: 13, fontWeight: "800" },
   disclaimer: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 20, fontStyle: "italic" },
   link: { color: colors.brandPrimary, fontWeight: "700", fontStyle: "normal" },
 }));

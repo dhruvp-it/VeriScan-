@@ -49,6 +49,7 @@ export default function RootLayout() {
               <Stack.Screen name="admin/payments" />
               <Stack.Screen name="admin/duplicates" />
               <Stack.Screen name="admin/analytics" />
+              <Stack.Screen name="admin/profile" />
             </Stack>
             <TermsGate />
           </KeyboardProvider>

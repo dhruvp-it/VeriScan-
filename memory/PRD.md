@@ -87,3 +87,24 @@ Anonymous counters live in MongoDB collection `analytics_daily` inside the `test
 - **Direct Mongo**: `db.analytics_daily.find({date: {$gte: "2026-09-01"}})` on MongoDB Atlas.
 
 Data is retained indefinitely (no PII → no retention duty). If the user later wants a hosted BI dashboard we can point Metabase or Retool at the same collection.
+
+## Iteration 9 (2026-09-23) — Launch prep: trial email, analytics insights, admin self-service
+**Trial reminder emails** — new `/app/backend/scheduler.py` runs an asyncio task on backend startup that wakes every hour and sends a friendly email to any user whose trial_expires_at is within 7 days and hasn't been reminded yet. Idempotent via `trial_reminder_sent_at` field.
+**Monthly analytics report** — same scheduler fires on day 1 of each month, emails every admin the previous month's totals + top 10 products + top 10 retailers. Idempotent via `monthly_report_log` collection. Manual force-send endpoint `POST /api/admin/analytics/report/send-now` for on-demand triggering.
+**Category + country breakdowns** — `analytics_daily` now stores extra `category:{cat}` and `country:{CC}` counters per event. `/api/admin/analytics/overview` returns `categories[]` and `countries[]`. Frontend request() sends `x-country` header from `veriscan_country` storage; /products/lookup passes it into scan analytics.
+**Admin profile with OTP self-service** — new `/api/admin/profile` (GET), `/change-email/start`+`/confirm` (two OTPs — one to current email, one to new), `/change-phone/start`+`/confirm` (single OTP to admin email — no SMS gateway integrated). Frontend screen `/admin/profile` with 3 sections.
+**Admin covers all critical ops** (verified): users list/suspend/reactivate/reset, country pricing, promocodes (create/deactivate), support tickets, data reports, payments+refund, duplicates (exact+fuzzy), contributions queue, anonymous analytics with CSV export, admin profile & security. Seeded admin email: `dhruvpateld230@gmail.com`.
+**Test results**: 20/20 new + 44/44 regression = 116/116 functional pass (77+19+20). SMS OTP for phone change is future work — requires Twilio/MSG91 integration.
+
+### Version 1.0 — Launch checklist
+- ✅ 3-month free trial with 7-day reminder email
+- ✅ Legal v2.0.0 (no-refund, no-cancellation, AS-IS, arbitration in Mumbai, jurisdiction carve-outs)
+- ✅ Razorpay for India (order + subscription + promo + refund + webhook)
+- ✅ Stripe for non-India (built + gated; requires real STRIPE_API_KEY to fire)
+- ✅ Anonymous analytics with category/country/product/retailer breakdown + monthly email + CSV export
+- ✅ Admin dashboard: users, pricing, promocodes, support, refunds, duplicates (fuzzy), analytics, admin profile
+- ✅ Live e-commerce comparison (7 retailers, hybrid deep-links + optional QuickCommerce/Apify)
+- ✅ OCR contribution flow (Claude Sonnet 4.6 via Emergent)
+- ✅ Regulatory badges (FSSAI/FDA/PETA/Vegan Society etc.)
+- ⏭ Stripe live key → drop into backend/.env
+- ⏭ SMS OTP for admin phone verification → add Twilio or MSG91 keys

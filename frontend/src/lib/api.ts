@@ -82,10 +82,12 @@ type RequestOptions = RequestInit & { guestId?: string };
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const token = await storage.secureGet(TOKEN_KEY, "");
   const guestId = options.guestId ?? await storage.secureGet(GUEST_KEY, "");
+  const country = await storage.getItem("veriscan_country", "");
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (guestId) headers.set("x-guest-id", guestId);
+  if (country) headers.set("x-country", country);
   const response = await fetch(`${API_ROOT}${path}`, { ...options, headers });
   if (!response.ok) {
     let message = "Something went wrong. Please try again.";
@@ -133,7 +135,19 @@ export const api = {
     request<{ status: string }>("/admin/pricing/stripe/toggle", { method: "POST", body: JSON.stringify({ country, monthly, yearly }) }),
 
   // Analytics admin
-  analyticsOverview: (days: number = 30) => request<{ days: number; totals: Record<string, number>; daily: { date: string; scan: number; retailer_click: number; contribute: number; share: number }[]; top_products: { barcode: string; count: number; name: string; brand: string; category: string }[]; retailers: { retailer_id: string; count: number }[] }>(`/admin/analytics/overview?days=${days}`),
+  analyticsOverview: (days: number = 30) => request<{ days: number; totals: Record<string, number>; daily: { date: string; scan: number; retailer_click: number; contribute: number; share: number }[]; top_products: { barcode: string; count: number; name: string; brand: string; category: string }[]; retailers: { retailer_id: string; count: number }[]; categories: { category: string; scan: number; retailer_click: number; contribute: number; share: number; total: number }[]; countries: { country: string; count: number }[] }>(`/admin/analytics/overview?days=${days}`),
+  sendMonthlyReportNow: () => request<{ sent: number }>("/admin/analytics/report/send-now", { method: "POST" }),
+
+  // Admin profile — email/phone change with OTP
+  adminProfile: () => request<{ id: string; email: string; phone_number: string | null; phone_verified_at: string | null; role: string; created_at: string }>("/admin/profile"),
+  adminChangeEmailStart: (newEmail: string, password: string) =>
+    request<{ session_id: string; expires_at: string }>("/admin/profile/change-email/start", { method: "POST", body: JSON.stringify({ new_email: newEmail, password }) }),
+  adminChangeEmailConfirm: (sessionId: string, currentOtp: string, newOtp: string) =>
+    request<{ status: string; new_email: string }>("/admin/profile/change-email/confirm", { method: "POST", body: JSON.stringify({ session_id: sessionId, current_otp: currentOtp, new_otp: newOtp }) }),
+  adminChangePhoneStart: (newPhone: string, password: string) =>
+    request<{ session_id: string; expires_at: string; delivery: string; delivery_notice: string }>("/admin/profile/change-phone/start", { method: "POST", body: JSON.stringify({ new_phone: newPhone, password }) }),
+  adminChangePhoneConfirm: (sessionId: string, otp: string) =>
+    request<{ status: string; new_phone: string }>("/admin/profile/change-phone/confirm", { method: "POST", body: JSON.stringify({ session_id: sessionId, otp }) }),
 
   // Legal
   terms: () => request<Legal>("/legal/terms"),
