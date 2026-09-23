@@ -25,6 +25,8 @@ const light = {
   onSuccess: "#FFFFFF",
   warning: "#FB8C00",
   onWarning: "#FFFFFF",
+  yellow: "#FDD835",
+  onYellow: "#1A1C19",
   error: "#E53935",
   onError: "#FFFFFF",
   info: "#0288D1",
