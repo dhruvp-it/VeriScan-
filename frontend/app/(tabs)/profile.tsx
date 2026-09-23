@@ -82,6 +82,40 @@ export default function ProfileTab() {
           <Ionicons name="chevron-forward" size={17} color={colors.muted} />
         </Pressable>
 
+        {entitlement?.registered ? (
+          <Pressable testID="profile-watchlist" onPress={() => router.push("/watchlist")} style={styles.rowLink}>
+            <Ionicons name="heart-outline" size={20} color={colors.brandPrimary} />
+            <Text style={styles.rowLinkText}>Watchlist</Text>
+            <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+          </Pressable>
+        ) : null}
+
+        <Pressable testID="profile-support" onPress={() => router.push("/support")} style={styles.rowLink}>
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.brandPrimary} />
+          <Text style={styles.rowLinkText}>Support</Text>
+          <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+        </Pressable>
+
+        <Pressable testID="profile-terms" onPress={() => router.push({ pathname: "/legal/[doc]", params: { doc: "terms" } })} style={styles.rowLink}>
+          <Ionicons name="document-text-outline" size={20} color={colors.brandPrimary} />
+          <Text style={styles.rowLinkText}>Terms of Service</Text>
+          <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+        </Pressable>
+
+        <Pressable testID="profile-privacy" onPress={() => router.push({ pathname: "/legal/[doc]", params: { doc: "privacy" } })} style={styles.rowLink}>
+          <Ionicons name="shield-outline" size={20} color={colors.brandPrimary} />
+          <Text style={styles.rowLinkText}>Privacy Policy</Text>
+          <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+        </Pressable>
+
+        {entitlement?.role === "admin" ? (
+          <Pressable testID="profile-admin" onPress={() => router.push("/admin")} style={styles.rowLink}>
+            <Ionicons name="shield-checkmark-outline" size={20} color={colors.brandSecondary} />
+            <Text style={[styles.rowLinkText, { color: colors.brandSecondary }]}>Admin dashboard</Text>
+            <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+          </Pressable>
+        ) : null}
+
         {entitlement?.registered && (
           <Pressable testID="profile-sign-out" onPress={signOut} style={styles.rowLink}>
             <Ionicons name="log-out-outline" size={20} color={colors.error} />

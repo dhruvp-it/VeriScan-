@@ -1,82 +1,80 @@
-# VeriScan — Product Requirements & State
+# VeriScan — PRD & State
 
 ## Vision
-AI product-health & ingredient intelligence app. Real-time barcode scanning, ingredient-level toxicity analysis (0–100), personalized health matching, price benchmark, and cleaner-alternative discovery.
+AI product-health & ingredient intelligence app for global users. Barcode scanner, ingredient-level toxicity (0–100), personalized match, watchlist, OCR fallback, admin backoffice.
 
-## Target platform
-Expo React Native mobile app (iOS 17+, Android). Preview served via Expo web + QR code.
+## Stack
+- **Frontend**: Expo Router (React Native), React Query, Expo Camera, Expo Image
+- **Backend**: FastAPI + MongoDB (Motor)
+- **LLM**: Claude Sonnet 4.6 via Emergent LLM Key (OCR extraction on contribution photos)
+- **Email**: Emergent-managed Resend (password reset OTP, watchlist alerts, admin reset codes)
+- **External data**: Open Food Facts + Open Beauty Facts
+- **Payments** (planned Iter 3): Razorpay (IN) + Stripe with Apple Pay (US/CA/EU/GB/AE/AU/NZ) + PPP pricing table already wired
 
-## Tech stack
-- Frontend: Expo Router (file-based routing) + React Query + Expo Camera
-- Backend: FastAPI (Python)
-- DB: MongoDB (Motor async driver) — problem statement mentioned Supabase/Postgres, but pod environment mandates MongoDB
-- Ingredient safety: keyword knowledge base of ~90 entries mapped to 0–100 scores + hazard tiers
-- External data: Open Food Facts + Open Beauty Facts public APIs
-- Payments (planned): Razorpay for India, Stripe for USA/CAD/EU/UAE/AU/NZ with Apple Pay, PPP-based currency conversion
+## Shipped (Iter 1 + 2)
+### User-facing
+- Onboarding preferences (dietary, health targets, ingredient sensitivities)
+- Guest mode with 3 free scans (device fingerprint in secure storage)
+- **T&C + Privacy Policy acceptance is mandatory on signup**; content served from `/api/legal/terms` and `/api/legal/privacy`, versioned
+- Email+password auth (bcrypt); minimal PII (only email needed)
+- **Password reset via 6-digit OTP** (10-min expiry, delivered by Resend)
+- Real product lookup via Open Food Facts / Open Beauty Facts with ingredient scoring
+- Nutrition per 100 g extracted and displayed
+- 0–100 safety spectrum (Red / Orange / Yellow / Light Green / Emerald) with color-coded chips
+- Personalized Match % — penalizes sensitivity violations
+- Ingredient bottom sheet with function, bodily impact, regulatory context
+- Nutrition per 100 g + Price benchmark card
+- **Better-For-You** carousel — 3 cleaner alternatives in same category
+- Product detail: watch-heart, report-flag, contribute-correction
+- **Watchlist** — save any product; email alert when a cleaner alt lands
+- **Notifications** (in-app inbox)
+- Scan history (registered + guest, migrated on signup)
+- **Support tickets** — user files ticket + sees status/response
+- **Misinformation reports** on any product
+- Contribution flow (5-step guided photo capture) — photos sent to Claude Sonnet 4.6 which returns structured ingredients + nutrition JSON
+- Legal screens (T&C + Privacy Policy readable in-app)
 
-## App structure (Expo Router)
-```
-app/
-  _layout.tsx            Stack + providers (QueryClient, KeyboardProvider, SafeAreaProvider)
-  index.tsx              Splash — redirect to onboarding or (tabs)
-  onboarding.tsx         Preference collection (dietary, targets, sensitivities)
-  preferences.tsx        Editable clean profile (modal)
-  plans.tsx              Subscription / pay-per-scan plans (modal)
-  (tabs)/
-    _layout.tsx          Bottom tabs (Home, Scan, History, Profile)
-    index.tsx            Home dashboard
-    scan.tsx             Camera + manual barcode lookup
-    history.tsx          Scan history
-    profile.tsx          Account + wallet + sign in
-  product/[barcode].tsx  Product detail (hero, score, nutrition, ingredients, retailers)
-  contribute/[barcode].tsx  5-step community capture (stub)
-```
+### Admin (role-based, gated by `role === "admin"`)
+- Admin dashboard with counts (users, suspended, open tickets, open reports, products, pending contributions)
+- Users list with **masked emails**, suspend/reactivate with reason, send-reset-code
+- Support tickets: filter by status, add internal note, transition to in_progress/resolved/closed
+- Data reports: same filter + resolution workflow
+- Country pricing editor (8 countries seeded: IN, US, CA, EU, GB, AE, AU, NZ)
+- Promo codes: create (percent / flat / free_scans) with max redemptions, per-country whitelist; deactivate
+- **Admin cannot**: see plaintext passwords, edit user preferences/history, hard-delete accounts (soft-suspend only), or unmask user emails
 
-## Shipped features
-- ✅ Onboarding preference collection (dietary, health targets, ingredient sensitivities)
-- ✅ Guest mode with 3 free scans tracked via secure `x-guest-id` header
-- ✅ Compulsory registration gate after quota
-- ✅ Email/password auth (JWT, bcrypt)
-- ✅ 5 free monthly scans for registered users (reset monthly)
-- ✅ Live camera barcode scanning (EAN-13, EAN-8, UPC-A/E) + torch + manual entry
-- ✅ Real product lookup via Open Food Facts / Open Beauty Facts
-- ✅ Ingredient-level safety scoring (0–100) with 5 hazard tiers and color spectrum
-- ✅ Nutrition per 100g extracted and displayed
-- ✅ Personalized Match % — penalizes when sensitivities are violated, boosts when preferences aligned
-- ✅ Product detail view with hero header, score ring, nutrition card, price benchmark, ingredient breakdown (sorted by risk), retailer list
-- ✅ Ingredient bottom sheet with function, bodily impact, regulatory context
-- ✅ Scan history with quick reopen
-- ✅ Guest → registered history migration on signup
-- ✅ Editable clean profile (Preferences modal)
-- ✅ Contribution flow (5-step guided capture, submits to community verification queue)
-- ✅ Plans / subscription screen with launch-promo pricing (₹72/mo, ₹450/yr, ₹5 intro + ₹15 standard per scan)
+### Legal-safety features
+- Terms of Service + Privacy Policy templates (v1.0.0) explicitly disclaim medical advice, cover IP, indemnity, UGC licensing, arbitration
+- Ingredient/scoring outputs are labelled as informational, never medical
+- All scan requests trust server-side entitlement counter (no client-side quota)
+- Admin actions logged in DB (support_tickets, reports, entitlements records)
+- Email guardrails enforced via `_assert_safe_email` — blocks credential harvesting, non-https links, form fields, homoglyph impersonation
 
-## Pending / Iteration 2 & 3
-- 🔨 OCR fallback: extract nutrition + ingredients + certification badges from photos via Claude Sonnet 4.6
-- 🔨 Stripe/Razorpay checkout UI with Apple Pay (native build only)
-- 🔨 Multi-currency PPP pricing (USA, CAD, EU, UAE, AU, NZ, IN)
-- 🔨 Better For You alternatives carousel on product detail
-- 🔨 Product image caching via Emergent Object Storage
+## Pending (Iter 3)
+- Razorpay checkout (India)
+- Stripe with Apple Pay for US/CA/EU/GB/AE/AU/NZ
+- Wire promo code redemption at checkout
+- Product image caching via Emergent Object Storage
 
-## Key API endpoints
-- `POST /api/auth/register` – Body `{email,password}`; header `x-guest-id` migrates guest data
-- `POST /api/auth/login`
-- `GET /api/entitlements` – Returns `{registered, free_remaining, wallet, subscribed, email}`
-- `GET /api/profile` / `PUT /api/profile` – Preferences
-- `GET /api/products/lookup?barcode=…` – Consumes 1 scan on success (404 does NOT consume)
-- `GET /api/history` – Sorted desc by scanned_at
-- `POST /api/contributions` – Enqueues a `pending_verification` record
-- `GET /api/plans`
-- `POST /api/payments/scan-intent` / `subscription-session` (503 until payment key configured)
-
-## Database collections (MongoDB)
-- `users` – `{id, email, password_hash, preferences, created_at}`
-- `entitlements` – `{user_id, free_month, free_used, purchased_balance, intro_used, subscribed}`
-- `guests` – `{guest_id, used, preferences}`
-- `products` – `{barcode, name, brand, category, ingredients_text, ingredients[], nutrition_per_100g, image_url, ...}`
-- `history` – `{id, user_id, product, scanned_at}`
-- `contributions` – `{id, barcode, product_name, notes, images[], status, submitted_by, created_at}`
-- `payments` – `{stripe_payment_intent_id, user_id, quantity, status, created_at}`
+## API summary
+- `POST /api/auth/{register,login,forgot-password,reset-password}`
+- `GET/PUT /api/profile` · `GET /api/entitlements`
+- `GET /api/legal/terms|privacy`
+- `GET /api/products/lookup?barcode=` · `/api/products/alternatives?barcode=` · `/api/history`
+- `POST /api/contributions` (calls Claude for OCR when images attached)
+- `GET/POST/DELETE /api/watchlist[/{barcode}]` · `GET /api/notifications` · `POST /api/notifications/{id}/read`
+- `POST /api/support` · `GET /api/support/mine` · `POST /api/reports`
+- `GET /api/plans?country=` · `GET /api/promocodes/{code}`
+- `GET /api/admin/{overview,users,pricing,promocodes,support,reports,contributions}`
+- `POST /api/admin/users/{id}/{suspend,reactivate,send-reset}`
+- `PUT /api/admin/{pricing,support,reports}/{id_or_country}`
+- `POST /api/admin/promocodes` · `DELETE /api/admin/promocodes/{code}`
 
 ## Testing status
-Iteration 3 backend regression: 13/13 pass after fix. Personalized match now correctly PENALIZES sensitivity violations (fragrance in a fragrance-free profile drops match from 66 → 37). 404 lookups no longer consume a scan.
+- Iter 2 backend regression: **22/22 pass** (JUnit at `/app/test_reports/pytest/iteration_4.xml`)
+- Test credentials in `/app/memory/test_credentials.md`
+
+## Notes for next iteration (payments)
+- `country_pricing` collection is the single source of truth — the admin panel already edits it
+- Each row includes `provider` field ('razorpay' or 'stripe') so the checkout screen can pick the right SDK
+- Multi-currency amounts already in place; iter 3 just needs SDK wiring + Apple Pay merchant setup on native build

@@ -1,20 +1,35 @@
+"""VeriScan FastAPI backend — auth, products, admin, watchlist, support, OCR."""
+import base64
 import logging
 import os
-import re
+import random
+import secrets
+import string
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import bcrypt
 import jwt
 import requests
 import stripe
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
+from emergentintegrations.llm.chat import ImageContent, LlmChat, UserMessage
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
+
+from emailer import (
+    render_admin_reset_link, render_otp_email, render_watchlist_alert, send_email,
+)
+from ingredients_db import (
+    build_public_product, overall_score, parse_ingredients, personalized_match,
+)
+from legal_content import (
+    EFFECTIVE_DATE, PRIVACY_POLICY, PRIVACY_VERSION, TERMS_OF_SERVICE, TERMS_VERSION,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -23,112 +38,43 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ.get("JWT_SECRET", "veriscan-local-development-secret")
 TOKEN_ALGORITHM = "HS256"
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+ADMIN_SEED_EMAIL = os.environ.get("ADMIN_SEED_EMAIL", "admin@veriscan.app").strip().lower()
+ADMIN_SEED_PASSWORD = os.environ.get("ADMIN_SEED_PASSWORD", "changeme-strong")
 
 app = FastAPI(title="VeriScan API")
 api_router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Ingredient knowledge base
-# Each entry: keyword -> (score 0-100, hazard tier, function, effect)
-# ---------------------------------------------------------------------------
-INGREDIENT_DB: List[Tuple[str, int, str, str, str]] = [
-    # Toxic / severe hazard (0-20)
-    ("formaldehyde", 8, "toxic", "Preservative", "Classified as a human carcinogen by IARC; associated with respiratory irritation and long-term health risks."),
-    ("coal tar", 10, "toxic", "Dye / anti-dandruff", "Coal-tar derived colorants are linked to cancer risk; banned in many EU cosmetic uses."),
-    ("hydroquinone", 15, "toxic", "Skin lightener", "Restricted in the EU. Prolonged use is linked to ochronosis and endocrine disruption concerns."),
-    ("triclosan", 18, "toxic", "Antibacterial", "Endocrine disruptor; contributes to antimicrobial resistance and bioaccumulation."),
-    ("bha", 18, "toxic", "Preservative", "Butylated hydroxyanisole is classified as a possible human carcinogen and endocrine disruptor."),
-    ("bht", 19, "toxic", "Preservative", "Butylated hydroxytoluene has estrogenic activity and may accumulate in body tissue."),
-    ("aspartame", 20, "toxic", "Sweetener", "Recently classified as a possible carcinogen by IARC. Use in moderation, especially for children."),
-    # High concern (21-40)
-    ("paraben", 24, "harmful", "Preservative", "Parabens can mimic estrogen and disrupt hormones. Prefer paraben-free formulations."),
-    ("sodium lauryl sulfate", 28, "harmful", "Surfactant", "Harsh cleanser that can strip the skin barrier and cause irritation in sensitive individuals."),
-    ("sls", 28, "harmful", "Surfactant", "Sodium lauryl sulfate is a harsh cleanser that can strip skin oils and irritate sensitive scalps."),
-    ("trans fat", 22, "harmful", "Fat", "Trans fats raise LDL cholesterol and cardiovascular risk. Avoid whenever possible."),
-    ("partially hydrogenated", 24, "harmful", "Fat", "Source of trans fats; strongly linked to heart disease."),
-    ("high fructose corn syrup", 30, "harmful", "Sweetener", "Excess consumption is linked to insulin resistance, fatty liver and weight gain."),
-    ("monosodium glutamate", 35, "harmful", "Flavor enhancer", "MSG may cause headaches or flushing in sensitive people; used to boost savory taste."),
-    ("sodium nitrite", 32, "harmful", "Curing agent", "Combines with amines in the body to form nitrosamines linked to colorectal cancer."),
-    ("propylparaben", 24, "harmful", "Preservative", "Endocrine disrupting paraben. Restricted in the EU for infant products."),
-    ("phthalate", 22, "harmful", "Plasticizer / fragrance carrier", "Endocrine disruptors linked to developmental and reproductive harm."),
-    ("fragrance", 38, "harmful", "Sensory additive", "'Fragrance' can hide dozens of undisclosed compounds; a top allergen for sensitive skin."),
-    ("parfum", 38, "harmful", "Sensory additive", "Undisclosed fragrance blend; may include phthalates and allergens."),
-    ("aluminum chlorohydrate", 38, "harmful", "Antiperspirant", "Debated links to hormonal effects; some consumers prefer aluminum-free alternatives."),
-    ("artificial color", 34, "harmful", "Color", "Synthetic dyes such as tartrazine (E102) are linked to hyperactivity in children."),
-    ("red 40", 32, "harmful", "Color", "FD&C Red 40 is linked to hyperactivity in children; banned in several EU foods."),
-    ("yellow 5", 30, "harmful", "Color", "Tartrazine may trigger asthma-like reactions and hyperactivity in some children."),
-    # Moderation (41-60)
-    ("palm oil", 50, "moderation", "Fat / emollient", "Palm oil is high in saturated fat; sourcing can contribute to deforestation."),
-    ("maltodextrin", 48, "moderation", "Bulking agent", "High glycemic index. Fine as an occasional additive but not for blood-sugar sensitivity."),
-    ("carrageenan", 46, "moderation", "Thickener", "Generally recognised as safe, but degraded forms may irritate the gut lining."),
-    ("sucralose", 52, "moderation", "Sweetener", "Zero-calorie sweetener; some studies suggest gut microbiome effects with heavy use."),
-    ("acesulfame", 52, "moderation", "Sweetener", "Non-nutritive sweetener; use moderately, especially during pregnancy."),
-    ("dextrose", 50, "moderation", "Sugar", "Simple sugar that spikes blood glucose. Watch total daily added sugar."),
-    ("sugar", 46, "moderation", "Sugar", "Added sugar contributes calories without nutrients; keep total daily intake moderate."),
-    ("cane sugar", 50, "moderation", "Sugar", "Refined cane sugar; moderate use recommended by dietary guidelines."),
-    ("glucose", 50, "moderation", "Sugar", "Simple sugar; spikes blood glucose. Watch total daily added sugar."),
-    ("fructose", 42, "moderation", "Sugar", "Fructose in isolation is metabolised by the liver and adds to daily added-sugar totals."),
-    ("vegetable fat", 44, "moderation", "Fat", "Often blends including palm oil; high in saturated fat depending on source."),
-    ("hazelnut", 82, "beneficial", "Whole food", "Rich in vitamin E, magnesium, and monounsaturated fats; may be a nut allergen."),
-    ("lecithin", 62, "safe", "Emulsifier", "Commonly derived from soy or sunflower; a well-tolerated food emulsifier."),
-    ("soya", 58, "moderation", "Legume", "Nutritious legume; common allergen to declare."),
-    ("skimmed milk", 66, "safe", "Dairy", "Low-fat dairy source of protein and calcium."),
-    ("cocoa powder", 76, "beneficial", "Botanical", "Rich in flavanols; watch for added sugars in the final product."),
-    ("vanillin", 58, "moderation", "Flavoring", "Synthetic vanilla flavoring; well tolerated at food-use levels."),
-    ("citric acid", 60, "moderation", "Acidifier", "Widely used pH regulator; sensitive teeth may be affected by frequent exposure."),
-    ("xanthan gum", 58, "moderation", "Thickener", "A common fermentation-derived stabilizer; occasional bloating in sensitive individuals."),
-    ("guar gum", 58, "moderation", "Thickener", "Well-tolerated soluble fiber; high doses can cause GI discomfort."),
-    ("sodium benzoate", 44, "moderation", "Preservative", "Safe at approved levels; can form benzene with vitamin C in beverages."),
-    ("polysorbate", 50, "moderation", "Emulsifier", "Widely used emulsifier. Some evidence of gut microbiome disruption at high intake."),
-    ("silicone", 55, "moderation", "Conditioner", "Provides smooth feel; can build up on hair over time."),
-    ("dimethicone", 55, "moderation", "Silicone", "Sensory-focused occlusive; buildup possible on hair and scalp."),
-    ("phenoxyethanol", 55, "moderation", "Preservative", "Safe under 1% in cosmetics; can be sensitizing for reactive skin."),
-    # Safe (61-80)
-    ("glycerin", 78, "safe", "Humectant", "Draws moisture to the skin barrier; well-tolerated across skin types."),
-    ("hyaluronic acid", 82, "beneficial", "Humectant", "Binds water to plump and hydrate the skin surface."),
-    ("niacinamide", 84, "beneficial", "Active", "Supports the skin barrier, evens tone, and calms redness."),
-    ("panthenol", 78, "safe", "Conditioner", "Provitamin B5; soothes and moisturizes skin and hair."),
-    ("salt", 62, "safe", "Mineral", "Essential mineral; watch total sodium if you have high blood pressure."),
-    ("sea salt", 65, "safe", "Mineral", "Trace-mineral rich salt; still counts toward daily sodium."),
-    ("iodized salt", 66, "safe", "Mineral", "Adds essential iodine to the diet; keep total sodium moderate."),
-    ("whole grain", 88, "beneficial", "Whole food", "Whole grains bring fiber, B-vitamins and slow-release carbs."),
-    ("oats", 90, "beneficial", "Whole food", "Beta-glucan fiber supports heart health, satiety and steady energy."),
-    ("brown rice", 84, "beneficial", "Whole food", "Whole grain rice retains bran fiber, magnesium and antioxidants."),
-    ("quinoa", 90, "beneficial", "Whole food", "Complete plant protein rich in fiber, iron and magnesium."),
-    ("almond", 86, "beneficial", "Whole food", "Rich in vitamin E, magnesium and healthy monounsaturated fats."),
-    ("cashew", 82, "beneficial", "Whole food", "Good source of magnesium, copper and heart-healthy fats."),
-    ("olive oil", 88, "beneficial", "Oil", "Monounsaturated fats and polyphenols; a Mediterranean-diet staple."),
-    ("coconut oil", 70, "safe", "Oil", "High in saturated fat; useful in moderation, better as part of balanced fats."),
-    ("shea butter", 84, "beneficial", "Emollient", "Rich fatty acids nourish the skin barrier and soothe dryness."),
-    ("aloe", 85, "beneficial", "Botanical", "Cooling and hydrating botanical, well-tolerated for sensitive skin."),
-    ("aloe vera", 85, "beneficial", "Botanical", "Cooling humectant that supports the skin barrier."),
-    ("green tea", 84, "beneficial", "Antioxidant", "Rich in polyphenols; supports antioxidant defense."),
-    ("vitamin c", 84, "beneficial", "Antioxidant", "Water-soluble antioxidant; supports immunity and collagen synthesis."),
-    ("ascorbic acid", 82, "beneficial", "Antioxidant", "Vitamin C form; potent antioxidant that also stabilizes food color."),
-    ("tocopherol", 82, "beneficial", "Antioxidant", "Vitamin E form; protects fats from oxidation and supports the skin barrier."),
-    ("vitamin e", 84, "beneficial", "Antioxidant", "Fat-soluble antioxidant that protects cell membranes."),
-    ("probiotic", 86, "beneficial", "Active", "Live cultures that support gut microbiome balance."),
-    ("prebiotic", 84, "beneficial", "Fiber", "Fiber that feeds beneficial gut bacteria."),
-    ("turmeric", 84, "beneficial", "Botanical", "Curcumin has anti-inflammatory activity; pair with black pepper for bioavailability."),
-    ("ginger", 82, "beneficial", "Botanical", "Digestive aid with anti-inflammatory potential."),
-    ("honey", 74, "safe", "Sweetener", "A natural sweetener with minor antimicrobial benefits; still an added sugar."),
-    ("stevia", 76, "safe", "Sweetener", "Plant-derived, zero-calorie sweetener; well-tolerated at moderate use."),
-    ("chia", 88, "beneficial", "Whole food", "Rich in omega-3 ALA, fiber and plant protein."),
-    ("flaxseed", 88, "beneficial", "Whole food", "Omega-3 ALA source that also supports gut regularity."),
-    ("cocoa", 76, "safe", "Botanical", "Antioxidant-rich cacao; watch added sugars in finished products."),
-    ("milk", 66, "safe", "Dairy", "Good source of calcium and protein; not suitable for those with lactose intolerance."),
-    ("yogurt", 76, "beneficial", "Dairy", "Fermented dairy with live cultures supporting gut health."),
-    ("egg", 78, "beneficial", "Whole food", "High-quality protein with choline for brain health."),
-    ("water", 90, "beneficial", "Solvent", "Base solvent; essential for hydration and formulation."),
-    ("aqua", 90, "beneficial", "Solvent", "INCI name for water; formulation base."),
-    ("salt-free", 80, "safe", "Formulation", "Formulated without added salt; supports heart-friendly diet."),
+PREFERENCES: Dict[str, List[str]] = {"dietary": [], "targets": [], "sensitivities": []}
+
+DEFAULT_COUNTRY_PRICING = [
+    # Base rates in INR; other currencies use approximate PPP multipliers
+    {"country": "IN", "currency": "INR", "symbol": "₹",
+     "scan_intro": 5, "scan_standard": 15, "monthly": 72, "yearly": 450,
+     "monthly_regular": 180, "yearly_regular": 1500, "provider": "razorpay"},
+    {"country": "US", "currency": "USD", "symbol": "$",
+     "scan_intro": 0.15, "scan_standard": 0.45, "monthly": 1.99, "yearly": 12.99,
+     "monthly_regular": 4.99, "yearly_regular": 39.99, "provider": "stripe"},
+    {"country": "CA", "currency": "CAD", "symbol": "CA$",
+     "scan_intro": 0.19, "scan_standard": 0.59, "monthly": 2.49, "yearly": 16.99,
+     "monthly_regular": 5.99, "yearly_regular": 49.99, "provider": "stripe"},
+    {"country": "EU", "currency": "EUR", "symbol": "€",
+     "scan_intro": 0.15, "scan_standard": 0.45, "monthly": 1.99, "yearly": 12.99,
+     "monthly_regular": 4.49, "yearly_regular": 34.99, "provider": "stripe"},
+    {"country": "GB", "currency": "GBP", "symbol": "£",
+     "scan_intro": 0.12, "scan_standard": 0.39, "monthly": 1.79, "yearly": 10.99,
+     "monthly_regular": 3.99, "yearly_regular": 29.99, "provider": "stripe"},
+    {"country": "AE", "currency": "AED", "symbol": "د.إ",
+     "scan_intro": 0.60, "scan_standard": 1.80, "monthly": 7.99, "yearly": 49.99,
+     "monthly_regular": 19.99, "yearly_regular": 149.99, "provider": "stripe"},
+    {"country": "AU", "currency": "AUD", "symbol": "A$",
+     "scan_intro": 0.22, "scan_standard": 0.69, "monthly": 2.99, "yearly": 18.99,
+     "monthly_regular": 6.99, "yearly_regular": 54.99, "provider": "stripe"},
+    {"country": "NZ", "currency": "NZD", "symbol": "NZ$",
+     "scan_intro": 0.25, "scan_standard": 0.79, "monthly": 3.49, "yearly": 21.99,
+     "monthly_regular": 7.99, "yearly_regular": 59.99, "provider": "stripe"},
 ]
-
-# Words we treat as clean-eating boosters when computing personalized match
-CLEAN_KEYWORDS = ("organic", "whole", "cold-pressed", "unrefined", "raw", "natural")
-
-PREFERENCES = {"dietary": [], "targets": [], "sensitivities": []}
 
 SEEDED_PRODUCTS = [
     {
@@ -137,12 +83,9 @@ SEEDED_PRODUCTS = [
         "description": "Whole grain oats for a simple, nourishing breakfast.",
         "dietary_type": "vegan", "origin_country": "India", "manufactured_in": "Pune, India",
         "first_detected_year": 2024, "price_tier": "affordable", "target_age_group": "Adults",
-        "primary_region": "India", "serving_size": "500 g", "price_inr": 249,
-        "image_url": None,
-        "nutrition_per_100g": {
-            "energy_kcal": 379, "protein_g": 13.2, "carbohydrates_g": 67.7, "sugars_g": 1.0,
-            "fat_g": 6.5, "saturated_fat_g": 1.1, "fiber_g": 10.1, "salt_g": 0.02,
-        },
+        "primary_region": "India", "serving_size": "500 g", "price_inr": 249, "image_url": None,
+        "nutrition_per_100g": {"energy_kcal": 379, "protein_g": 13.2, "carbohydrates_g": 67.7, "sugars_g": 1.0,
+                                "fat_g": 6.5, "saturated_fat_g": 1.1, "fiber_g": 10.1, "salt_g": 0.02},
         "ingredients_text": "Whole grain rolled oats, Vitamin E (tocopherol).",
         "labels": ["vegan", "whole grain"],
         "retailers": [
@@ -156,8 +99,7 @@ SEEDED_PRODUCTS = [
         "description": "A fragrance-free daily cleanser designed for sensitive skin.",
         "dietary_type": "not_applicable", "origin_country": "India", "manufactured_in": "Bengaluru, India",
         "first_detected_year": 2023, "price_tier": "premium", "target_age_group": "Adults",
-        "primary_region": "India", "serving_size": "150 ml", "price_inr": 695,
-        "image_url": None,
+        "primary_region": "India", "serving_size": "150 ml", "price_inr": 695, "image_url": None,
         "nutrition_per_100g": None,
         "ingredients_text": "Aqua, Glycerin, Sodium Laureth Sulfate, Panthenol, Phenoxyethanol, Fragrance.",
         "labels": [],
@@ -172,12 +114,9 @@ SEEDED_PRODUCTS = [
         "description": "Pea and brown rice protein with a lightly sweet vanilla finish.",
         "dietary_type": "vegan", "origin_country": "India", "manufactured_in": "Hyderabad, India",
         "first_detected_year": 2024, "price_tier": "high", "target_age_group": "Adults",
-        "primary_region": "India", "serving_size": "500 g", "price_inr": 1299,
-        "image_url": None,
-        "nutrition_per_100g": {
-            "energy_kcal": 380, "protein_g": 78.0, "carbohydrates_g": 5.0, "sugars_g": 1.5,
-            "fat_g": 4.0, "saturated_fat_g": 1.0, "fiber_g": 4.0, "salt_g": 0.3,
-        },
+        "primary_region": "India", "serving_size": "500 g", "price_inr": 1299, "image_url": None,
+        "nutrition_per_100g": {"energy_kcal": 380, "protein_g": 78.0, "carbohydrates_g": 5.0, "sugars_g": 1.5,
+                                "fat_g": 4.0, "saturated_fat_g": 1.0, "fiber_g": 4.0, "salt_g": 0.3},
         "ingredients_text": "Pea protein isolate, Brown rice protein, Natural vanilla flavor, Stevia extract, Xanthan gum.",
         "labels": ["vegan", "gluten-free"],
         "retailers": [
@@ -185,12 +124,35 @@ SEEDED_PRODUCTS = [
             {"name": "HealthKart", "price": 1199, "url": "https://www.healthkart.com/"},
         ],
     },
+    {
+        "id": "seed-oats-002", "barcode": "8901030895002", "name": "Steel-Cut Whole Oats",
+        "brand": "Field & Grain", "category": "food",
+        "description": "Minimally-processed steel-cut oats with a nutty bite.",
+        "dietary_type": "vegan", "origin_country": "India", "manufactured_in": "Pune, India",
+        "first_detected_year": 2025, "price_tier": "affordable", "target_age_group": "Adults",
+        "primary_region": "India", "serving_size": "500 g", "price_inr": 289, "image_url": None,
+        "nutrition_per_100g": {"energy_kcal": 375, "protein_g": 14.0, "carbohydrates_g": 62.0, "sugars_g": 0.6,
+                                "fat_g": 6.0, "saturated_fat_g": 1.0, "fiber_g": 12.0, "salt_g": 0.01},
+        "ingredients_text": "Organic whole grain steel-cut oats.",
+        "labels": ["organic", "vegan", "whole grain"],
+        "retailers": [{"name": "BigBasket", "price": 289, "url": "https://www.bigbasket.com/"}],
+    },
 ]
 
 
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 class AuthRequest(BaseModel):
     email: str
     password: str = Field(min_length=6)
+    accepted_terms_version: Optional[str] = None
+    accepted_privacy_version: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
 class ProfileRequest(BaseModel):
@@ -202,6 +164,7 @@ class ProfileRequest(BaseModel):
 class ContributionRequest(BaseModel):
     barcode: str
     product_name: Optional[str] = None
+    brand: Optional[str] = None
     notes: Optional[str] = None
     images: List[str] = []
 
@@ -213,8 +176,65 @@ class ScanPurchase(BaseModel):
 
 class SubscriptionPurchase(BaseModel):
     plan: str
+    country: Optional[str] = None
 
 
+class SupportRequest(BaseModel):
+    subject: str = Field(min_length=3, max_length=140)
+    message: str = Field(min_length=5, max_length=4000)
+    category: str = Field(default="general")
+
+
+class ReportRequest(BaseModel):
+    barcode: str
+    reason: str = Field(min_length=5, max_length=1000)
+
+
+class PasswordResetStart(BaseModel):
+    email: str
+
+
+class PasswordResetComplete(BaseModel):
+    email: str
+    otp: str
+    new_password: str = Field(min_length=6)
+
+
+class AdminPricingUpdate(BaseModel):
+    country: str
+    currency: str
+    symbol: str
+    scan_intro: float
+    scan_standard: float
+    monthly: float
+    yearly: float
+    monthly_regular: float
+    yearly_regular: float
+    provider: str
+
+
+class AdminPromocode(BaseModel):
+    code: str = Field(min_length=3, max_length=32)
+    kind: str  # 'percent' | 'flat' | 'free_scans'
+    value: float
+    max_redemptions: int = 100
+    countries: List[str] = []
+    expires_at: Optional[str] = None
+    active: bool = True
+
+
+class SupportUpdate(BaseModel):
+    status: str  # 'open' | 'in_progress' | 'resolved' | 'closed'
+    admin_note: Optional[str] = None
+
+
+class UserSuspendRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=280)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -224,6 +244,15 @@ def token_for(user_id: str) -> str:
         {"sub": user_id, "exp": datetime.now(timezone.utc).timestamp() + 60 * 60 * 24 * 30},
         JWT_SECRET, algorithm=TOKEN_ALGORITHM,
     )
+
+
+def mask_email(email: str) -> str:
+    if not email or "@" not in email:
+        return "***"
+    name, domain = email.split("@", 1)
+    if len(name) <= 2:
+        return f"{name[0]}***@{domain}"
+    return f"{name[0]}{'*' * (len(name) - 2)}{name[-1]}@{domain}"
 
 
 async def authenticated_user(authorization: Optional[str]) -> Dict[str, Any]:
@@ -236,179 +265,25 @@ async def authenticated_user(authorization: Optional[str]) -> Dict[str, Any]:
         user = None
     if not user:
         raise HTTPException(401, "Session expired")
+    if user.get("suspended"):
+        raise HTTPException(403, "This account has been suspended. Please contact support.")
     return user
 
 
-# ---------------------------------------------------------------------------
-# Ingredient scoring
-# ---------------------------------------------------------------------------
-def _clean(text: str) -> str:
-    return re.sub(r"[^a-z0-9\s-]", " ", text.lower()).strip()
+async def admin_user(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    user = await authenticated_user(authorization)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin access required")
+    return user
 
 
-def score_ingredient(name: str) -> Dict[str, Any]:
-    """Score a single ingredient name against the knowledge base with fuzzy match."""
-    clean_name = _clean(name)
-    for keyword, score, hazard, function, effect in INGREDIENT_DB:
-        if keyword in clean_name:
-            return {"name": name.strip().title(), "score": score, "hazard": hazard, "function": function, "effect": effect}
-    # unknown ingredient: neutral score
-    return {
-        "name": name.strip().title(),
-        "score": 62,
-        "hazard": "safe",
-        "function": "Formulation ingredient",
-        "effect": "Reviewed from the public product label. Individual responses may vary; check the packaging for full context.",
-    }
-
-
-def parse_ingredients(text: str) -> List[Dict[str, Any]]:
-    if not text:
-        return []
-    # Keep parenthetical hints inline so palm/soya etc. still match the safety DB
-    stripped = re.sub(r"[()]", " ", text)
-    parts = re.split(r"[,;.]", stripped)
-    seen: set[str] = set()
-    result: List[Dict[str, Any]] = []
-    for part in parts:
-        name = re.sub(r"\s+", " ", part).strip()
-        if not name or len(name) < 2:
-            continue
-        # Trim leading role labels like "emulsifier: lecithins"
-        if ":" in name:
-            name = name.split(":", 1)[1].strip()
-        # Skip numeric-only tokens like "7%" or "13"
-        if re.fullmatch(r"[\d.,%\s]+", name):
-            continue
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(score_ingredient(name))
-        if len(result) >= 30:
-            break
-    return result
-
-
-def overall_score(ingredients: List[Dict[str, Any]]) -> float:
-    if not ingredients:
-        return 60.0
-    scores = [int(item.get("score", 60)) for item in ingredients]
-    average = sum(scores) / len(scores)
-    low = [s for s in scores if s < 25]
-    # Exponential penalty for very-low-scoring ingredients
-    penalty = 0.0
-    for s in low:
-        penalty += (25 - s) * 1.2
-    return round(max(0.0, min(100.0, average - penalty)), 1)
-
-
-# ---------------------------------------------------------------------------
-# Personalized match
-# ---------------------------------------------------------------------------
-def personalized_match(product: Dict[str, Any], preferences: Dict[str, List[str]]) -> int:
-    ingredients_text = " ".join(item.get("name", "").lower() for item in product.get("ingredients", []))
-    labels = " ".join(product.get("labels", [])).lower()
-    dietary_type = (product.get("dietary_type") or "").lower()
-    scores = [int(item.get("score", 60)) for item in product.get("ingredients", [])] or [60]
-    base_health = overall_score(product.get("ingredients", []))
-
-    checks: List[bool] = []
-    sensitivity_violations = 0
-
-    for pref in preferences.get("dietary", []):
-        want = pref.lower()
-        if want == "vegan":
-            checks.append(dietary_type == "vegan" or "vegan" in labels)
-        elif want == "vegetarian":
-            checks.append(dietary_type in ("vegan", "vegetarian") or dietary_type == "not_applicable")
-        elif want == "pescatarian":
-            checks.append(dietary_type != "non_vegetarian" or "fish" in ingredients_text)
-        elif "whole" in want:
-            checks.append(any(word in ingredients_text or word in labels for word in CLEAN_KEYWORDS))
-        else:
-            checks.append(True)
-
-    for target in preferences.get("targets", []):
-        want = target.lower()
-        if "sugar" in want:
-            sugars = ((product.get("nutrition_per_100g") or {}).get("sugars_g") or 0)
-            checks.append(sugars < 8)
-        elif "carb" in want:
-            carbs = ((product.get("nutrition_per_100g") or {}).get("carbohydrates_g") or 0)
-            checks.append(carbs < 25)
-        elif "heart" in want:
-            sat = ((product.get("nutrition_per_100g") or {}).get("saturated_fat_g") or 0)
-            checks.append(sat < 4 and min(scores) >= 30)
-        elif "gut" in want:
-            checks.append(any(k in ingredients_text for k in ("probiotic", "prebiotic", "fiber", "yogurt")))
-        elif "clean" in want:
-            checks.append(min(scores) >= 30 and any(w in ingredients_text or w in labels for w in CLEAN_KEYWORDS))
-        else:
-            checks.append(True)
-
-    for avoid in preferences.get("sensitivities", []):
-        want = avoid.lower()
-        if "paraben" in want:
-            ok = "paraben" not in ingredients_text
-        elif "fragrance" in want:
-            ok = "fragrance" not in ingredients_text and "parfum" not in ingredients_text
-        elif "additive" in want:
-            ok = min(scores) >= 40
-        elif "cruelty" in want:
-            ok = "cruelty-free" in labels or "leaping bunny" in labels or product.get("category") in ("food", "supplement")
-        elif "gluten" in want:
-            ok = "gluten-free" in labels or "wheat" not in ingredients_text
-        elif "nut" in want:
-            ok = not any(n in ingredients_text for n in ("almond", "cashew", "peanut", "walnut", "hazelnut"))
-        else:
-            ok = True
-        checks.append(ok)
-        if not ok:
-            sensitivity_violations += 1
-
-    if not checks:
-        return max(40, min(100, int(base_health)))
-
-    ratio = sum(1 for c in checks if c) / len(checks)
-    base = 55 + ratio * 45
-    # Heavy penalty for sensitivity violations — those are user-declared avoidance rules.
-    base -= 18 * sensitivity_violations
-    # Penalty for red-flag ingredients
-    if min(scores) < 25:
-        base -= 12
-    # If any sensitivity was violated, cap the match at the raw health score so
-    # the user never sees a match that exceeds the underlying ingredient score.
-    if sensitivity_violations > 0:
-        base = min(base, base_health)
-    return max(20, min(100, round(base)))
-
-
-def build_public_product(product: Dict[str, Any], preferences: Dict[str, List[str]]) -> Dict[str, Any]:
-    ingredients = product.get("ingredients")
-    if not ingredients:
-        ingredients = parse_ingredients(product.get("ingredients_text") or "")
-    ingredients_sorted = sorted(ingredients, key=lambda item: item.get("score", 60))
-    result = {key: value for key, value in product.items() if key not in {"_id", "ingredients"}}
-    result["ingredients"] = ingredients_sorted
-    result["overall_health_score"] = overall_score(ingredients_sorted)
-    result["personal_match"] = personalized_match({**product, "ingredients": ingredients_sorted}, preferences)
-    result["retailers"] = product.get("retailers", [])
-    result.setdefault("nutrition_per_100g", None)
-    result.setdefault("image_url", None)
-    result.setdefault("labels", [])
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Scan quota
-# ---------------------------------------------------------------------------
 async def consume_scan(guest_id: Optional[str], user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if user:
         entitlement = await db.entitlements.find_one({"user_id": user["id"]}, {"_id": 0})
         month = datetime.now(timezone.utc).strftime("%Y-%m")
         if not entitlement or entitlement.get("free_month") != month:
-            entitlement = {"user_id": user["id"], "free_month": month, "free_used": 0, "purchased_balance": 0, "intro_used": 0, "subscribed": False}
+            entitlement = {"user_id": user["id"], "free_month": month, "free_used": 0,
+                           "purchased_balance": 0, "intro_used": 0, "subscribed": False}
             await db.entitlements.replace_one({"user_id": user["id"]}, entitlement, upsert=True)
         if entitlement.get("subscribed"):
             return {"remaining": None, "source": "subscription"}
@@ -429,9 +304,6 @@ async def consume_scan(guest_id: Optional[str], user: Optional[Dict[str, Any]]) 
     return {"remaining": 2 - used, "source": "guest"}
 
 
-# ---------------------------------------------------------------------------
-# External lookup
-# ---------------------------------------------------------------------------
 def _nutrition_from_off(nutriments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(nutriments, dict) or not nutriments:
         return None
@@ -443,23 +315,16 @@ def _nutrition_from_off(nutriments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
     out = {
         "energy_kcal": num("energy-kcal") or num("energy"),
-        "protein_g": num("proteins"),
-        "carbohydrates_g": num("carbohydrates"),
-        "sugars_g": num("sugars"),
-        "fat_g": num("fat"),
-        "saturated_fat_g": num("saturated-fat"),
-        "fiber_g": num("fiber"),
-        "salt_g": num("salt"),
+        "protein_g": num("proteins"), "carbohydrates_g": num("carbohydrates"),
+        "sugars_g": num("sugars"), "fat_g": num("fat"),
+        "saturated_fat_g": num("saturated-fat"), "fiber_g": num("fiber"), "salt_g": num("salt"),
     }
     return out if any(v is not None for v in out.values()) else None
 
 
 def _dietary_type_from_off(product: Dict[str, Any]) -> str:
-    labels = " ".join([
-        str(product.get("labels", "")),
-        str(product.get("labels_tags", "")),
-        str(product.get("categories", "")),
-    ]).lower()
+    labels = " ".join([str(product.get("labels", "")), str(product.get("labels_tags", "")),
+                       str(product.get("categories", ""))]).lower()
     if "vegan" in labels:
         return "vegan"
     if "vegetarian" in labels:
@@ -476,11 +341,8 @@ def remote_lookup(barcode: str) -> Optional[Dict[str, Any]]:
     ]
     for endpoint, category in endpoints:
         try:
-            response = requests.get(
-                f"{endpoint}{barcode}.json",
-                timeout=6,
-                headers={"User-Agent": "VeriScan/1.0 (contact@veriscan.app)"},
-            )
+            response = requests.get(f"{endpoint}{barcode}.json", timeout=6,
+                                    headers={"User-Agent": "VeriScan/1.0 (support@veriscan.app)"})
             data = response.json()
             if data.get("status") != 1:
                 continue
@@ -489,8 +351,7 @@ def remote_lookup(barcode: str) -> Optional[Dict[str, Any]]:
             labels_tags = product.get("labels_tags", []) or []
             image = product.get("image_front_url") or product.get("image_url")
             record = {
-                "id": f"online-{barcode}",
-                "barcode": barcode,
+                "id": f"online-{barcode}", "barcode": barcode,
                 "name": product.get("product_name") or product.get("generic_name") or "Scanned product",
                 "brand": (product.get("brands") or "Public registry").split(",")[0].strip(),
                 "category": category,
@@ -499,12 +360,10 @@ def remote_lookup(barcode: str) -> Optional[Dict[str, Any]]:
                 "origin_country": (product.get("countries") or "Global").split(",")[0].strip(),
                 "manufactured_in": (product.get("manufacturing_places") or product.get("countries") or "Registry listing").split(",")[0].strip(),
                 "first_detected_year": datetime.now(timezone.utc).year,
-                "price_tier": "affordable",
-                "target_age_group": "Adults",
+                "price_tier": "affordable", "target_age_group": "Adults",
                 "primary_region": (product.get("countries") or "Global").split(",")[0].strip(),
                 "serving_size": product.get("serving_size") or product.get("quantity") or "See label",
-                "price_inr": 0,
-                "image_url": image,
+                "price_inr": 0, "image_url": image,
                 "labels": [tag.replace("en:", "").replace("-", " ") for tag in labels_tags[:6]],
                 "ingredients_text": ingredients_text,
                 "nutrition_per_100g": _nutrition_from_off(product.get("nutriments", {})),
@@ -518,16 +377,76 @@ def remote_lookup(barcode: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def alternatives_for(product: Dict[str, Any], preferences: Dict[str, List[str]], limit: int = 3) -> List[Dict[str, Any]]:
+    threshold = product.get("overall_health_score", 60)
+    cursor = db.products.find(
+        {"category": product.get("category"), "barcode": {"$ne": product.get("barcode")}},
+        {"_id": 0},
+    ).limit(30)
+    candidates = []
+    async for candidate in cursor:
+        scored = build_public_product(candidate, preferences)
+        if scored["overall_health_score"] > threshold:
+            candidates.append(scored)
+    candidates.sort(key=lambda item: (item["overall_health_score"], item["personal_match"]), reverse=True)
+    return candidates[:limit]
+
+
+async def maybe_notify_watchlist(new_product: Dict[str, Any]) -> None:
+    """When a new product is added, alert any user watching a similar-category
+    product with a lower safety score."""
+    barcodes = await db.watchlist.distinct("barcode")
+    if not barcodes:
+        return
+    for barcode in barcodes:
+        watched = await db.products.find_one({"barcode": barcode}, {"_id": 0})
+        if not watched:
+            continue
+        if watched.get("category") != new_product.get("category"):
+            continue
+        old_score = overall_score(watched.get("ingredients", []))
+        new_score = overall_score(new_product.get("ingredients", []))
+        if new_score <= old_score + 5:
+            continue
+        watchers = db.watchlist.find({"barcode": barcode}, {"_id": 0})
+        async for entry in watchers:
+            user = await db.users.find_one({"id": entry["user_id"]}, {"_id": 0})
+            if not user or user.get("suspended"):
+                continue
+            await db.notifications.insert_one({
+                "id": str(uuid.uuid4()), "user_id": user["id"],
+                "kind": "watchlist_alt",
+                "title": f"A cleaner {new_product.get('category', 'product').replace('_', ' ')} landed",
+                "body": f"{new_product['name']} scores {int(new_score)}/100 — better than your saved {watched['name']}.",
+                "product_barcode": new_product.get("barcode"),
+                "read": False, "created_at": now_iso(),
+            })
+            subject, html = render_watchlist_alert(watched["name"], new_product["name"], int(new_score))
+            await send_email(to=user["email"], subject=subject, html=html)
+
+
 # ---------------------------------------------------------------------------
-# API routes
+# Auth
 # ---------------------------------------------------------------------------
 @api_router.get("/")
 async def root() -> Dict[str, str]:
     return {"message": "VeriScan API is ready"}
 
 
+@api_router.get("/legal/terms")
+async def legal_terms() -> Dict[str, Any]:
+    return {"version": TERMS_VERSION, "effective": EFFECTIVE_DATE, "content": TERMS_OF_SERVICE}
+
+
+@api_router.get("/legal/privacy")
+async def legal_privacy() -> Dict[str, Any]:
+    return {"version": PRIVACY_VERSION, "effective": EFFECTIVE_DATE, "content": PRIVACY_POLICY}
+
+
 @api_router.post("/auth/register")
 async def register(payload: AuthRequest, x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    if payload.accepted_terms_version != TERMS_VERSION or payload.accepted_privacy_version != PRIVACY_VERSION:
+        raise HTTPException(400, "Please accept the current Terms & Privacy Policy to continue.")
     email = payload.email.strip().lower()
     if await db.users.find_one({"email": email}, {"_id": 0}):
         raise HTTPException(409, "An account with this email already exists")
@@ -537,10 +456,12 @@ async def register(payload: AuthRequest, x_guest_id: Optional[str] = Header(defa
         if guest and guest.get("preferences"):
             preferences = guest["preferences"]
     user = {
-        "id": str(uuid.uuid4()),
-        "email": email,
+        "id": str(uuid.uuid4()), "email": email,
         "password_hash": bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode(),
-        "preferences": preferences,
+        "preferences": preferences, "role": "user",
+        "suspended": False,
+        "terms_accepted": {"version": TERMS_VERSION, "at": now_iso()},
+        "privacy_accepted": {"version": PRIVACY_VERSION, "at": now_iso()},
         "created_at": now_iso(),
     }
     await db.users.insert_one(user.copy())
@@ -550,26 +471,68 @@ async def register(payload: AuthRequest, x_guest_id: Optional[str] = Header(defa
     })
     if x_guest_id:
         await db.history.update_many({"user_id": f"guest:{x_guest_id}"}, {"$set": {"user_id": user["id"]}})
-    return {"token": token_for(user["id"]), "user": {"id": user["id"], "email": email, "preferences": user["preferences"]}}
+    return {"token": token_for(user["id"]), "user": {"id": user["id"], "email": email, "preferences": user["preferences"], "role": "user"}}
 
 
 @api_router.post("/auth/login")
-async def login(payload: AuthRequest) -> Dict[str, Any]:
+async def login(payload: LoginRequest) -> Dict[str, Any]:
     user = await db.users.find_one({"email": payload.email.strip().lower()}, {"_id": 0})
     if not user or not bcrypt.checkpw(payload.password.encode(), user["password_hash"].encode()):
         raise HTTPException(401, "Email or password is incorrect")
-    return {"token": token_for(user["id"]), "user": {"id": user["id"], "email": user["email"], "preferences": user.get("preferences", PREFERENCES)}}
+    if user.get("suspended"):
+        raise HTTPException(403, "This account has been suspended. Please contact support.")
+    return {"token": token_for(user["id"]), "user": {
+        "id": user["id"], "email": user["email"], "preferences": user.get("preferences", PREFERENCES),
+        "role": user.get("role", "user"),
+    }}
 
 
+@api_router.post("/auth/forgot-password")
+async def forgot_password(payload: PasswordResetStart) -> Dict[str, str]:
+    email = payload.email.strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    # Always respond with the same message to avoid enumeration
+    if user and not user.get("suspended"):
+        otp = f"{random.randint(0, 999999):06d}"
+        await db.password_resets.insert_one({
+            "email": email, "otp": otp,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+            "created_at": now_iso(),
+        })
+        subject, html = render_otp_email(otp)
+        await send_email(to=email, subject=subject, html=html)
+    return {"status": "sent"}
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: PasswordResetComplete) -> Dict[str, str]:
+    email = payload.email.strip().lower()
+    record = await db.password_resets.find_one(
+        {"email": email, "otp": payload.otp}, {"_id": 0}, sort=[("created_at", -1)],
+    )
+    if not record:
+        raise HTTPException(400, "That reset code doesn't match. Try again or request a new one.")
+    if datetime.fromisoformat(record["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(400, "This reset code has expired. Please request a new one.")
+    new_hash = bcrypt.hashpw(payload.new_password.encode(), bcrypt.gensalt()).decode()
+    await db.users.update_one({"email": email}, {"$set": {"password_hash": new_hash}})
+    await db.password_resets.delete_many({"email": email})
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Profile & Entitlements
+# ---------------------------------------------------------------------------
 @api_router.get("/profile")
 async def get_profile(authorization: Optional[str] = Header(default=None), x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     if authorization:
         user = await authenticated_user(authorization)
-        return {"email": user["email"], "preferences": user.get("preferences", PREFERENCES), "registered": True}
+        return {"email": user["email"], "preferences": user.get("preferences", PREFERENCES),
+                "registered": True, "role": user.get("role", "user")}
     if x_guest_id:
         guest = await db.guests.find_one({"guest_id": x_guest_id}, {"_id": 0}) or {}
-        return {"email": None, "preferences": guest.get("preferences", PREFERENCES), "registered": False}
-    return {"email": None, "preferences": PREFERENCES, "registered": False}
+        return {"email": None, "preferences": guest.get("preferences", PREFERENCES), "registered": False, "role": "guest"}
+    return {"email": None, "preferences": PREFERENCES, "registered": False, "role": "guest"}
 
 
 @api_router.put("/profile")
@@ -589,22 +552,20 @@ async def entitlements(authorization: Optional[str] = Header(default=None), x_gu
         user = await authenticated_user(authorization)
         item = await db.entitlements.find_one({"user_id": user["id"]}, {"_id": 0}) or {}
         return {
-            "registered": True,
+            "registered": True, "role": user.get("role", "user"),
             "free_remaining": max(0, 5 - item.get("free_used", 0)),
             "wallet": item.get("purchased_balance", 0),
-            "subscribed": item.get("subscribed", False),
-            "email": user["email"],
+            "subscribed": item.get("subscribed", False), "email": user["email"],
         }
     guest = await db.guests.find_one({"guest_id": x_guest_id}, {"_id": 0}) if x_guest_id else None
-    return {
-        "registered": False,
-        "free_remaining": max(0, 3 - (guest or {}).get("used", 0)),
-        "wallet": 0,
-        "subscribed": False,
-        "email": None,
-    }
+    return {"registered": False, "role": "guest",
+            "free_remaining": max(0, 3 - (guest or {}).get("used", 0)),
+            "wallet": 0, "subscribed": False, "email": None}
 
 
+# ---------------------------------------------------------------------------
+# Products
+# ---------------------------------------------------------------------------
 @api_router.get("/products/lookup")
 async def lookup_product(
     barcode: str,
@@ -617,10 +578,9 @@ async def lookup_product(
         product = remote_lookup(barcode)
         if product:
             await db.products.update_one({"barcode": barcode}, {"$set": product}, upsert=True)
+            await maybe_notify_watchlist(product)
     if not product:
-        # Don't consume a scan when the product isn't found.
         raise HTTPException(404, detail={"message": "Product not found", "barcode": barcode})
-    # Consume scan only after a successful resolution.
     consumed = await consume_scan(x_guest_id, user)
     if user:
         preferences = user.get("preferences", PREFERENCES)
@@ -632,10 +592,26 @@ async def lookup_product(
     result = build_public_product(product, preferences)
     result["scan"] = consumed
     history_user = user["id"] if user else f"guest:{x_guest_id}"
-    await db.history.insert_one({
-        "id": str(uuid.uuid4()), "user_id": history_user, "product": result, "scanned_at": now_iso(),
-    })
+    await db.history.insert_one({"id": str(uuid.uuid4()), "user_id": history_user,
+                                  "product": result, "scanned_at": now_iso()})
     return result
+
+
+@api_router.get("/products/alternatives")
+async def product_alternatives(barcode: str, authorization: Optional[str] = Header(default=None), x_guest_id: Optional[str] = Header(default=None)) -> List[Dict[str, Any]]:
+    product = await db.products.find_one({"barcode": barcode}, {"_id": 0})
+    if not product:
+        return []
+    if authorization:
+        user = await authenticated_user(authorization)
+        preferences = user.get("preferences", PREFERENCES)
+    elif x_guest_id:
+        guest = await db.guests.find_one({"guest_id": x_guest_id}, {"_id": 0}) or {}
+        preferences = guest.get("preferences", PREFERENCES)
+    else:
+        preferences = PREFERENCES
+    scored_product = build_public_product(product, preferences)
+    return await alternatives_for(scored_product, preferences)
 
 
 @api_router.get("/history")
@@ -648,49 +624,203 @@ async def history(authorization: Optional[str] = Header(default=None), x_guest_i
 @api_router.post("/contributions")
 async def contribution(payload: ContributionRequest, authorization: Optional[str] = Header(default=None), x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     user = await authenticated_user(authorization) if authorization else None
+    parsed_ingredients: List[Dict[str, Any]] = []
+    ingredients_text = ""
+    nutrition: Optional[Dict[str, Any]] = None
+    dietary_type = "not_applicable"
+    ocr_error: Optional[str] = None
+    if payload.images and EMERGENT_LLM_KEY:
+        try:
+            structured = await extract_product_from_images(payload.images)
+            ingredients_text = structured.get("ingredients_text", "")
+            parsed_ingredients = parse_ingredients(ingredients_text)
+            nutrition = structured.get("nutrition_per_100g") or None
+            dietary_type = structured.get("dietary_type") or "not_applicable"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("OCR extraction failed: %s", exc)
+            ocr_error = str(exc)
     item = {
-        "id": str(uuid.uuid4()), "barcode": payload.barcode, "product_name": payload.product_name,
-        "notes": payload.notes, "images": payload.images, "status": "pending_verification",
-        "submitted_by": (user or {}).get("id", f"guest:{x_guest_id}"), "created_at": now_iso(),
+        "id": str(uuid.uuid4()), "barcode": payload.barcode,
+        "product_name": payload.product_name, "brand": payload.brand,
+        "notes": payload.notes, "images": payload.images,
+        "extracted": {
+            "ingredients_text": ingredients_text, "ingredients": parsed_ingredients,
+            "nutrition_per_100g": nutrition, "dietary_type": dietary_type,
+        },
+        "status": "pending_verification",
+        "submitted_by": (user or {}).get("id", f"guest:{x_guest_id}"),
+        "created_at": now_iso(),
     }
     await db.contributions.insert_one(item.copy())
-    return {key: value for key, value in item.items() if key != "images"}
+    response = {key: value for key, value in item.items() if key != "images"}
+    if ocr_error:
+        response["ocr_error"] = ocr_error
+    return response
 
 
+async def extract_product_from_images(images_base64: List[str]) -> Dict[str, Any]:
+    """Send up to 5 label images to Claude and parse structured JSON."""
+    limited = images_base64[:5]
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"veriscan-ocr-{uuid.uuid4()}",
+        system_message=(
+            "You extract product-label data from mobile phone photos of packaged food, "
+            "supplements and personal-care products. Read the label text carefully. "
+            "Return ONLY minified JSON with the schema: {\"ingredients_text\": string (comma separated as printed), "
+            "\"nutrition_per_100g\": {\"energy_kcal\": number|null, \"protein_g\": number|null, "
+            "\"carbohydrates_g\": number|null, \"sugars_g\": number|null, \"fat_g\": number|null, "
+            "\"saturated_fat_g\": number|null, \"fiber_g\": number|null, \"salt_g\": number|null}, "
+            "\"dietary_type\": one of 'vegan'|'vegetarian'|'non_vegetarian'|'not_applicable', "
+            "\"certifications\": string[]}. If a field can't be read, return null (or empty)."
+        ),
+    ).with_model("anthropic", "claude-sonnet-4-6")
+    contents = [ImageContent(image_base64=img) for img in limited if img]
+    message = UserMessage(
+        text="Extract the label data from these product photos and return JSON only.",
+        file_contents=contents,
+    )
+    full = ""
+    from emergentintegrations.llm.chat import StreamDone, TextDelta
+    async for event in chat.stream_message(message):
+        if isinstance(event, TextDelta):
+            full += event.content
+        elif isinstance(event, StreamDone):
+            break
+    # Robustly extract the first JSON object
+    import json, re as _re
+    match = _re.search(r"\{[\s\S]*\}", full)
+    if not match:
+        raise RuntimeError("Model returned no JSON")
+    return json.loads(match.group(0))
+
+
+# ---------------------------------------------------------------------------
+# Watchlist & notifications
+# ---------------------------------------------------------------------------
+@api_router.get("/watchlist")
+async def watchlist(authorization: Optional[str] = Header(default=None)) -> List[Dict[str, Any]]:
+    user = await authenticated_user(authorization)
+    items = await db.watchlist.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    hydrated = []
+    for item in items:
+        product = await db.products.find_one({"barcode": item["barcode"]}, {"_id": 0})
+        if product:
+            hydrated.append({"barcode": item["barcode"], "added_at": item["added_at"],
+                             "product": build_public_product(product, user.get("preferences", PREFERENCES))})
+    return hydrated
+
+
+@api_router.post("/watchlist/{barcode}")
+async def watchlist_add(barcode: str, authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
+    user = await authenticated_user(authorization)
+    await db.watchlist.update_one(
+        {"user_id": user["id"], "barcode": barcode},
+        {"$setOnInsert": {"user_id": user["id"], "barcode": barcode, "added_at": now_iso()}},
+        upsert=True,
+    )
+    return {"status": "saved"}
+
+
+@api_router.delete("/watchlist/{barcode}")
+async def watchlist_remove(barcode: str, authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
+    user = await authenticated_user(authorization)
+    await db.watchlist.delete_one({"user_id": user["id"], "barcode": barcode})
+    return {"status": "removed"}
+
+
+@api_router.get("/notifications")
+async def notifications(authorization: Optional[str] = Header(default=None)) -> List[Dict[str, Any]]:
+    user = await authenticated_user(authorization)
+    return await db.notifications.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+@api_router.post("/notifications/{notification_id}/read")
+async def notification_read(notification_id: str, authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
+    user = await authenticated_user(authorization)
+    await db.notifications.update_one({"id": notification_id, "user_id": user["id"]}, {"$set": {"read": True}})
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Support tickets & reports
+# ---------------------------------------------------------------------------
+@api_router.post("/support")
+async def submit_support(payload: SupportRequest, authorization: Optional[str] = Header(default=None), x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    user = await authenticated_user(authorization) if authorization else None
+    ticket = {
+        "id": str(uuid.uuid4()), "user_id": (user or {}).get("id"),
+        "user_email": (user or {}).get("email"),
+        "guest_id": x_guest_id if not user else None,
+        "subject": payload.subject, "message": payload.message,
+        "category": payload.category, "status": "open",
+        "admin_note": None, "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.support_tickets.insert_one(ticket.copy())
+    return {"id": ticket["id"], "status": "open", "created_at": ticket["created_at"]}
+
+
+@api_router.get("/support/mine")
+async def my_tickets(authorization: Optional[str] = Header(default=None)) -> List[Dict[str, Any]]:
+    user = await authenticated_user(authorization)
+    return await db.support_tickets.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+@api_router.post("/reports")
+async def submit_report(payload: ReportRequest, authorization: Optional[str] = Header(default=None), x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    user = await authenticated_user(authorization) if authorization else None
+    item = {
+        "id": str(uuid.uuid4()), "barcode": payload.barcode, "reason": payload.reason,
+        "reporter_user_id": (user or {}).get("id"),
+        "reporter_guest_id": x_guest_id if not user else None,
+        "status": "open", "admin_note": None,
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.reports.insert_one(item.copy())
+    return {"id": item["id"], "status": "open"}
+
+
+# ---------------------------------------------------------------------------
+# Pricing (public)
+# ---------------------------------------------------------------------------
 @api_router.get("/plans")
-async def plans() -> Dict[str, Any]:
+async def plans(country: Optional[str] = None) -> Dict[str, Any]:
+    country = (country or "IN").upper()
+    pricing_doc = await db.country_pricing.find_one({"country": country}, {"_id": 0})
+    if not pricing_doc:
+        pricing_doc = await db.country_pricing.find_one({"country": "IN"}, {"_id": 0})
+    pricing_doc = pricing_doc or DEFAULT_COUNTRY_PRICING[0]
     return {
         "launch_promo": True,
-        "scan_intro": {"price": 5, "label": "First 20 purchased scans"},
-        "scan_standard": {"price": 15, "label": "After introductory credits"},
+        "country": pricing_doc["country"], "currency": pricing_doc["currency"], "symbol": pricing_doc["symbol"],
+        "provider": pricing_doc["provider"],
+        "scan_intro": {"price": pricing_doc["scan_intro"], "label": "First 20 purchased scans"},
+        "scan_standard": {"price": pricing_doc["scan_standard"], "label": "After introductory credits"},
         "subscriptions": [
-            {"id": "monthly", "price": 72, "regular_price": 180, "period": "month"},
-            {"id": "yearly", "price": 450, "regular_price": 1500, "period": "year"},
+            {"id": "monthly", "price": pricing_doc["monthly"], "regular_price": pricing_doc["monthly_regular"], "period": "month"},
+            {"id": "yearly", "price": pricing_doc["yearly"], "regular_price": pricing_doc["yearly_regular"], "period": "year"},
         ],
     }
 
 
-@api_router.post("/payments/scan-intent")
-async def scan_intent(payload: ScanPurchase, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-    user = await authenticated_user(authorization)
-    amount = {"intro": 500, "standard": 1500}.get(payload.tier)
-    if amount is None:
-        raise HTTPException(400, "Invalid scan tier")
-    if not os.environ.get("STRIPE_SECRET_KEY"):
-        raise HTTPException(503, "Payments are not configured yet")
-    stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
-    intent = stripe.PaymentIntent.create(
-        amount=amount * payload.quantity, currency="inr",
-        automatic_payment_methods={"enabled": True},
-        metadata={"user_id": user["id"], "kind": "scan_credits", "quantity": str(payload.quantity)},
-    )
-    await db.payments.insert_one({
-        "stripe_payment_intent_id": intent.id, "user_id": user["id"], "quantity": payload.quantity,
-        "status": "created", "created_at": now_iso(),
-    })
-    return {"paymentIntentClientSecret": intent.client_secret}
+@api_router.get("/promocodes/{code}")
+async def promocode_lookup(code: str, country: Optional[str] = None) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    promo = await db.promocodes.find_one({"code": code.upper(), "active": True}, {"_id": 0})
+    if not promo:
+        raise HTTPException(404, "That promo code isn't valid.")
+    if promo.get("expires_at") and datetime.fromisoformat(promo["expires_at"]) < now:
+        raise HTTPException(410, "That promo code has expired.")
+    if promo.get("redemptions", 0) >= promo.get("max_redemptions", 100):
+        raise HTTPException(410, "That promo code is fully redeemed.")
+    if country and promo.get("countries") and country.upper() not in promo["countries"]:
+        raise HTTPException(400, "That promo code isn't available in your region.")
+    return promo
 
 
+# ---------------------------------------------------------------------------
+# Payments (unchanged; multi-currency wiring will land in Iteration 3)
+# ---------------------------------------------------------------------------
 @api_router.post("/payments/subscription-session")
 async def subscription_session(payload: SubscriptionPurchase, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     user = await authenticated_user(authorization)
@@ -711,42 +841,198 @@ async def subscription_session(payload: SubscriptionPurchase, authorization: Opt
     return {"url": session.url, "sessionId": session.id}
 
 
-@api_router.post("/payments/stripe/webhook")
-async def stripe_webhook(request: Request) -> Dict[str, bool]:
-    secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
-    if not secret:
-        raise HTTPException(503, "Webhook is not configured")
+# ---------------------------------------------------------------------------
+# Admin panel
+# ---------------------------------------------------------------------------
+@api_router.get("/admin/overview")
+async def admin_overview(_: Dict[str, Any] = Depends(admin_user)) -> Dict[str, int]:
+    return {
+        "users": await db.users.count_documents({"role": {"$ne": "admin"}}),
+        "suspended": await db.users.count_documents({"suspended": True}),
+        "open_tickets": await db.support_tickets.count_documents({"status": "open"}),
+        "open_reports": await db.reports.count_documents({"status": "open"}),
+        "products": await db.products.count_documents({}),
+        "contributions_pending": await db.contributions.count_documents({"status": "pending_verification"}),
+    }
+
+
+@api_router.get("/admin/users")
+async def admin_users(_: Dict[str, Any] = Depends(admin_user), q: Optional[str] = None) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {"role": {"$ne": "admin"}}
+    if q:
+        query["email"] = {"$regex": q.lower(), "$options": "i"}
+    users = await db.users.find(query, {"_id": 0, "password_hash": 0, "preferences": 0}).sort("created_at", -1).to_list(200)
+    return [{
+        "id": u["id"], "email_masked": mask_email(u["email"]),
+        "suspended": u.get("suspended", False),
+        "created_at": u.get("created_at"),
+        "terms_version": u.get("terms_accepted", {}).get("version"),
+    } for u in users]
+
+
+@api_router.post("/admin/users/{user_id}/suspend")
+async def admin_user_suspend(user_id: str, payload: UserSuspendRequest, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    result = await db.users.update_one({"id": user_id, "role": {"$ne": "admin"}}, {"$set": {"suspended": True, "suspension_reason": payload.reason}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    return {"status": "suspended"}
+
+
+@api_router.post("/admin/users/{user_id}/reactivate")
+async def admin_user_reactivate(user_id: str, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    result = await db.users.update_one({"id": user_id}, {"$set": {"suspended": False}, "$unset": {"suspension_reason": ""}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    return {"status": "active"}
+
+
+@api_router.post("/admin/users/{user_id}/send-reset")
+async def admin_send_reset(user_id: str, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(404, "User not found")
+    otp = f"{random.randint(0, 999999):06d}"
+    await db.password_resets.insert_one({
+        "email": user["email"], "otp": otp,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+        "created_at": now_iso(),
+    })
+    subject, html = render_admin_reset_link(otp, user["email"])
+    await send_email(to=user["email"], subject=subject, html=html)
+    return {"status": "sent"}
+
+
+@api_router.get("/admin/pricing")
+async def admin_pricing(_: Dict[str, Any] = Depends(admin_user)) -> List[Dict[str, Any]]:
+    return await db.country_pricing.find({}, {"_id": 0}).sort("country", 1).to_list(100)
+
+
+@api_router.put("/admin/pricing/{country}")
+async def admin_pricing_update(country: str, payload: AdminPricingUpdate, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    doc = payload.model_dump()
+    doc["country"] = country.upper()
+    await db.country_pricing.replace_one({"country": country.upper()}, doc, upsert=True)
+    return {"status": "updated"}
+
+
+@api_router.get("/admin/promocodes")
+async def admin_promocodes(_: Dict[str, Any] = Depends(admin_user)) -> List[Dict[str, Any]]:
+    return await db.promocodes.find({}, {"_id": 0}).sort("code", 1).to_list(200)
+
+
+@api_router.post("/admin/promocodes")
+async def admin_promocode_create(payload: AdminPromocode, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    if payload.kind not in {"percent", "flat", "free_scans"}:
+        raise HTTPException(400, "Invalid promocode kind")
+    doc = payload.model_dump()
+    doc["code"] = doc["code"].upper()
+    doc["redemptions"] = 0
+    doc["created_at"] = now_iso()
     try:
-        event = stripe.Webhook.construct_event(await request.body(), request.headers.get("stripe-signature", ""), secret)
-    except (ValueError, stripe.error.SignatureVerificationError):
-        raise HTTPException(400, "Invalid Stripe webhook")
-    try:
-        await db.webhook_events.insert_one({"stripe_event_id": event["id"], "created_at": now_iso()})
+        await db.promocodes.insert_one(doc.copy())
     except Exception:  # noqa: BLE001
-        return {"ok": True}
-    obj = event["data"]["object"]
-    if event["type"] == "payment_intent.succeeded":
-        metadata = obj.get("metadata", {})
-        quantity = int(metadata.get("quantity", "0"))
-        await db.entitlements.update_one({"user_id": metadata.get("user_id")}, {"$inc": {"purchased_balance": quantity}})
-        await db.payments.update_one({"stripe_payment_intent_id": obj["id"]}, {"$set": {"status": "succeeded"}})
-    if event["type"] == "checkout.session.completed":
-        await db.entitlements.update_one(
-            {"user_id": obj.get("metadata", {}).get("user_id")},
-            {"$set": {"subscribed": True, "subscription_plan": obj.get("metadata", {}).get("plan")}},
-        )
-    return {"ok": True}
+        raise HTTPException(409, "A promo code with that name already exists")
+    return {"status": "created"}
 
 
+@api_router.delete("/admin/promocodes/{code}")
+async def admin_promocode_delete(code: str, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    result = await db.promocodes.update_one({"code": code.upper()}, {"$set": {"active": False}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Promo code not found")
+    return {"status": "deactivated"}
+
+
+@api_router.get("/admin/support")
+async def admin_support(_: Dict[str, Any] = Depends(admin_user), status: Optional[str] = None) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {}
+    if status:
+        query["status"] = status
+    tickets = await db.support_tickets.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    for ticket in tickets:
+        if ticket.get("user_email"):
+            ticket["user_email"] = mask_email(ticket["user_email"])
+    return tickets
+
+
+@api_router.put("/admin/support/{ticket_id}")
+async def admin_support_update(ticket_id: str, payload: SupportUpdate, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    if payload.status not in {"open", "in_progress", "resolved", "closed"}:
+        raise HTTPException(400, "Invalid status")
+    result = await db.support_tickets.update_one({"id": ticket_id}, {"$set": {
+        "status": payload.status, "admin_note": payload.admin_note, "updated_at": now_iso(),
+    }})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Ticket not found")
+    return {"status": "updated"}
+
+
+@api_router.get("/admin/reports")
+async def admin_reports(_: Dict[str, Any] = Depends(admin_user), status: Optional[str] = None) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {}
+    if status:
+        query["status"] = status
+    return await db.reports.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api_router.put("/admin/reports/{report_id}")
+async def admin_report_update(report_id: str, payload: SupportUpdate, _: Dict[str, Any] = Depends(admin_user)) -> Dict[str, str]:
+    if payload.status not in {"open", "in_progress", "resolved", "closed"}:
+        raise HTTPException(400, "Invalid status")
+    result = await db.reports.update_one({"id": report_id}, {"$set": {
+        "status": payload.status, "admin_note": payload.admin_note, "updated_at": now_iso(),
+    }})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Report not found")
+    return {"status": "updated"}
+
+
+@api_router.get("/admin/contributions")
+async def admin_contributions(_: Dict[str, Any] = Depends(admin_user), status: Optional[str] = None) -> List[Dict[str, Any]]:
+    query: Dict[str, Any] = {}
+    if status:
+        query["status"] = status
+    items = await db.contributions.find(query, {"_id": 0, "images": 0}).sort("created_at", -1).to_list(100)
+    return items
+
+
+# ---------------------------------------------------------------------------
+# App wiring & startup
+# ---------------------------------------------------------------------------
 app.include_router(api_router)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 @app.on_event("startup")
 async def seed_database() -> None:
+    # Seed sample products (idempotent)
     for product in SEEDED_PRODUCTS:
         enriched = {**product, "ingredients": parse_ingredients(product.get("ingredients_text", ""))}
         await db.products.update_one({"barcode": product["barcode"]}, {"$set": enriched}, upsert=True)
+    # Seed default country pricing
+    for entry in DEFAULT_COUNTRY_PRICING:
+        await db.country_pricing.update_one({"country": entry["country"]}, {"$setOnInsert": entry}, upsert=True)
+    # Ensure a promocode uniqueness index
+    await db.promocodes.create_index("code", unique=True)
+    # Seed admin user
+    existing = await db.users.find_one({"email": ADMIN_SEED_EMAIL}, {"_id": 0})
+    if existing:
+        if existing.get("role") != "admin":
+            await db.users.update_one({"email": ADMIN_SEED_EMAIL}, {"$set": {"role": "admin", "suspended": False}})
+    else:
+        admin = {
+            "id": str(uuid.uuid4()), "email": ADMIN_SEED_EMAIL,
+            "password_hash": bcrypt.hashpw(ADMIN_SEED_PASSWORD.encode(), bcrypt.gensalt()).decode(),
+            "preferences": PREFERENCES.copy(), "role": "admin", "suspended": False,
+            "terms_accepted": {"version": TERMS_VERSION, "at": now_iso()},
+            "privacy_accepted": {"version": PRIVACY_VERSION, "at": now_iso()},
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(admin)
+        await db.entitlements.insert_one({
+            "user_id": admin["id"], "free_month": datetime.now(timezone.utc).strftime("%Y-%m"),
+            "free_used": 0, "purchased_balance": 0, "intro_used": 0, "subscribed": True,
+        })
 
 
 @app.on_event("shutdown")

@@ -1,17 +1,19 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View,
+  ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { BetterForYou } from "@/src/components/better-for-you";
 import { IngredientSheet } from "@/src/components/ingredient-sheet";
 import { NutritionCard } from "@/src/components/nutrition-card";
 import { PriceBenchmark } from "@/src/components/price-benchmark";
-import { api, Ingredient, Product } from "@/src/lib/api";
+import { useEntitlement } from "@/src/hooks/use-entitlement";
+import { api, Ingredient, Product, WatchlistItem } from "@/src/lib/api";
 import { scoreColor, scoreLabel } from "@/src/lib/scoring";
 import { makeStyles, useTheme } from "@/src/theme";
 
@@ -20,8 +22,13 @@ export default function ProductRoute() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { barcode } = useLocalSearchParams<{ barcode: string }>();
   const [selected, setSelected] = useState<Ingredient | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportMessage, setReportMessage] = useState("");
+  const { data: entitlement } = useEntitlement();
   const { data: product, isLoading, error } = useQuery<Product>({
     queryKey: ["product", barcode],
     queryFn: () => api.lookup(barcode as string),
@@ -30,6 +37,31 @@ export default function ProductRoute() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+
+  const { data: watchlist } = useQuery<WatchlistItem[]>({
+    queryKey: ["watchlist"],
+    queryFn: () => api.watchlist(),
+    enabled: entitlement?.registered ?? false,
+    initialData: [],
+  });
+  const isWatched = watchlist?.some((item) => item.barcode === barcode);
+
+  const toggleWatch = useMutation({
+    mutationFn: () => isWatched ? api.watchlistRemove(barcode as string) : api.watchlistAdd(barcode as string),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["watchlist"] }),
+  });
+
+  const submitReport = async () => {
+    setReportMessage("");
+    try {
+      await api.submitReport(barcode as string, reportReason);
+      setReportMessage("Thanks — our team will review the report.");
+      setReportReason("");
+      setTimeout(() => setReportOpen(false), 1400);
+    } catch (e) {
+      setReportMessage((e as Error).message);
+    }
+  };
 
   if (isLoading || !product) {
     return (
@@ -56,10 +88,34 @@ export default function ProductRoute() {
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Pressable testID="product-back" onPress={() => router.back()} style={styles.backRow}>
-          <Ionicons name="arrow-back" size={21} color={colors.onSurface} />
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
+        <View style={styles.topActions}>
+          <Pressable testID="product-back" onPress={() => router.back()} style={styles.backRow}>
+            <Ionicons name="arrow-back" size={21} color={colors.onSurface} />
+            <Text style={styles.backText}>Back</Text>
+          </Pressable>
+          <View style={styles.rightActions}>
+            {entitlement?.registered ? (
+              <Pressable
+                testID="product-watch"
+                onPress={() => toggleWatch.mutate()}
+                style={styles.roundButton}
+                accessibilityRole="button"
+                accessibilityLabel={isWatched ? "Remove from watchlist" : "Save to watchlist"}
+              >
+                <Ionicons name={isWatched ? "heart" : "heart-outline"} size={20} color={isWatched ? colors.error : colors.onSurface} />
+              </Pressable>
+            ) : null}
+            <Pressable
+              testID="product-report"
+              onPress={() => setReportOpen(true)}
+              style={styles.roundButton}
+              accessibilityRole="button"
+              accessibilityLabel="Report inaccurate info"
+            >
+              <Ionicons name="flag-outline" size={19} color={colors.onSurface} />
+            </Pressable>
+          </View>
+        </View>
 
         <View style={styles.hero}>
           <View style={styles.artwork}>
@@ -176,6 +232,8 @@ export default function ProductRoute() {
           </>
         ) : null}
 
+        <BetterForYou barcode={barcode as string} />
+
         <Pressable
           testID="product-contribute"
           onPress={() => router.push({ pathname: "/contribute/[barcode]", params: { barcode: product.barcode } })}
@@ -186,6 +244,36 @@ export default function ProductRoute() {
         </Pressable>
       </ScrollView>
       <IngredientSheet ingredient={selected} onClose={() => setSelected(null)} />
+      {reportOpen ? (
+        <View style={styles.reportBackdrop}>
+          <Pressable style={styles.reportDismiss} onPress={() => setReportOpen(false)} />
+          <View style={styles.reportSheet}>
+            <View style={styles.reportHandle} />
+            <Text style={styles.reportTitle}>Report inaccurate info</Text>
+            <Text style={styles.reportBody}>
+              Tell us what looks wrong — outdated ingredients, wrong nutrition, misleading badges, etc.
+            </Text>
+            <TextInput
+              testID="report-reason"
+              value={reportReason}
+              onChangeText={setReportReason}
+              placeholder="What should we double-check?"
+              placeholderTextColor={colors.muted}
+              multiline
+              style={styles.reportInput}
+            />
+            {reportMessage ? <Text style={styles.body}>{reportMessage}</Text> : null}
+            <Pressable
+              testID="report-submit"
+              onPress={submitReport}
+              disabled={reportReason.trim().length < 5}
+              style={[styles.reportPrimary, reportReason.trim().length < 5 && styles.reportDisabled]}
+            >
+              <Text style={styles.reportPrimaryText}>Submit report</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -194,8 +282,21 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   scroll: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, backgroundColor: colors.surface },
-  backRow: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 44, marginBottom: 12 },
+  topActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+  rightActions: { flexDirection: "row", gap: 10, alignItems: "center" },
+  roundButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center" },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 44 },
   backText: { color: colors.onSurface, fontSize: 14, fontWeight: "700" },
+  reportBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(17,19,17,0.36)", justifyContent: "flex-end", zIndex: 30 },
+  reportDismiss: { flex: 1 },
+  reportSheet: { backgroundColor: colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, paddingBottom: 32 },
+  reportHandle: { alignSelf: "center", width: 44, height: 5, borderRadius: 3, backgroundColor: colors.borderStrong, marginBottom: 16 },
+  reportTitle: { color: colors.onSurface, fontSize: 20, fontWeight: "800" },
+  reportBody: { color: colors.onSurfaceSecondary, fontSize: 14, lineHeight: 21, marginTop: 6, marginBottom: 14 },
+  reportInput: { minHeight: 100, borderRadius: 14, backgroundColor: colors.surfaceTertiary, padding: 14, color: colors.onSurface, fontSize: 15, textAlignVertical: "top" },
+  reportPrimary: { minHeight: 48, borderRadius: 16, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", marginTop: 16 },
+  reportPrimaryText: { color: colors.onBrandPrimary, fontSize: 15, fontWeight: "800" },
+  reportDisabled: { opacity: 0.5 },
   hero: { alignItems: "center", paddingBottom: 22 },
   artwork: { width: 112, height: 112, borderRadius: 32, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center", marginBottom: 16, overflow: "hidden" },
   artworkImage: { width: "100%", height: "100%" },

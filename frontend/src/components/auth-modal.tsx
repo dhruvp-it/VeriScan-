@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Pressable,
@@ -15,31 +16,45 @@ type Props = { visible: boolean; onClose: () => void; onSuccess?: (email: string
 export function AuthModal({ visible, onClose, onSuccess }: Props) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const router = useRouter();
   const [mode, setMode] = useState<"register" | "login">("register");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const queryClient = useQueryClient();
 
+  const { data: terms } = useQuery({ queryKey: ["terms-version"], queryFn: () => api.terms(), enabled: visible });
+  const { data: privacy } = useQuery({ queryKey: ["privacy-version"], queryFn: () => api.privacy(), enabled: visible });
+
   if (!visible) return null;
 
   const submit = async () => {
+    if (mode === "register" && !agreed) {
+      setError("Please accept the Terms & Privacy Policy to continue.");
+      return;
+    }
     setBusy(true); setError("");
     try {
       const result = mode === "register"
-        ? await api.register(email.trim(), password)
+        ? await api.register(email.trim(), password, terms?.version ?? "1.0.0", privacy?.version ?? "1.0.0")
         : await api.login(email.trim(), password);
       await storage.secureSet(TOKEN_KEY, result.token);
       await queryClient.invalidateQueries();
       onSuccess?.(result.user.email);
       onClose();
-      setEmail(""); setPassword("");
+      setEmail(""); setPassword(""); setAgreed(false);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const openLegal = (route: "/legal/terms" | "/legal/privacy") => {
+    onClose();
+    router.push(route);
   };
 
   return (
@@ -48,7 +63,7 @@ export function AuthModal({ visible, onClose, onSuccess }: Props) {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.wrap}>
         <View style={styles.card}>
           <View style={styles.headerRow}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.eyebrow}>{mode === "register" ? "KEEP YOUR HISTORY" : "WELCOME BACK"}</Text>
               <Text style={styles.title}>{mode === "register" ? "Create your account" : "Sign in to VeriScan"}</Text>
             </View>
@@ -58,35 +73,49 @@ export function AuthModal({ visible, onClose, onSuccess }: Props) {
           </View>
           <Text style={styles.body}>
             {mode === "register"
-              ? "Your first three scans are free. Sign up to keep going and sync your clean profile."
+              ? "We only need your email — no date of birth or personal info."
               : "Continue your ingredient journey."}
           </Text>
           <TextInput
-            testID="auth-email"
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            placeholder="Email address"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
+            testID="auth-email" value={email} onChangeText={setEmail}
+            autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
+            placeholder="Email address" placeholderTextColor={colors.muted} style={styles.input}
           />
           <TextInput
-            testID="auth-password"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            placeholder="Password (6+ characters)"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
+            testID="auth-password" value={password} onChangeText={setPassword}
+            secureTextEntry placeholder="Password (6+ characters)"
+            placeholderTextColor={colors.muted} style={styles.input}
           />
+          {mode === "register" ? (
+            <Pressable testID="auth-agree" onPress={() => setAgreed(!agreed)} style={styles.agreeRow}>
+              <View style={[styles.checkbox, agreed && styles.checkboxOn]}>
+                {agreed ? <Ionicons name="checkmark" size={16} color={colors.onBrandPrimary} /> : null}
+              </View>
+              <Text style={styles.agreeText}>
+                I agree to the{" "}
+                <Text style={styles.link} onPress={() => openLegal("/legal/terms")}>Terms</Text>
+                {" "}and{" "}
+                <Text style={styles.link} onPress={() => openLegal("/legal/privacy")}>Privacy Policy</Text>.
+              </Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              testID="auth-forgot"
+              onPress={() => { onClose(); router.push("/forgot-password"); }}
+              style={styles.forgotButton}
+            >
+              <Text style={styles.link}>Forgot password?</Text>
+            </Pressable>
+          )}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable
             testID="auth-submit"
             onPress={submit}
-            disabled={busy || !email || password.length < 6}
-            style={[styles.primaryButton, (busy || !email || password.length < 6) && styles.primaryDisabled]}
+            disabled={busy || !email || password.length < 6 || (mode === "register" && !agreed)}
+            style={[
+              styles.primaryButton,
+              (busy || !email || password.length < 6 || (mode === "register" && !agreed)) && styles.primaryDisabled,
+            ]}
           >
             {busy
               ? <ActivityIndicator color={colors.onBrandPrimary} />
@@ -118,5 +147,10 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   primaryButton: { minHeight: 52, borderRadius: 18, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 10, paddingHorizontal: 18, marginTop: 20 },
   primaryDisabled: { opacity: 0.5 },
   primaryText: { color: colors.onBrandPrimary, fontSize: 16, fontWeight: "800" },
-  link: { color: colors.brandPrimary, fontWeight: "700", fontSize: 14, textAlign: "center", marginTop: 16, paddingVertical: 8 },
+  link: { color: colors.brandPrimary, fontWeight: "700", fontSize: 14, textAlign: "center", paddingVertical: 8 },
+  forgotButton: { marginTop: 8, alignItems: "flex-end" },
+  agreeRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.borderStrong, alignItems: "center", justifyContent: "center" },
+  checkboxOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  agreeText: { flex: 1, color: colors.onSurfaceSecondary, fontSize: 13, lineHeight: 19 },
 }));

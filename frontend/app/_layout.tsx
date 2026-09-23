@@ -34,6 +34,16 @@ export default function RootLayout() {
               <Stack.Screen name="contribute/[barcode]" />
               <Stack.Screen name="plans" options={{ presentation: "modal" }} />
               <Stack.Screen name="preferences" options={{ presentation: "modal" }} />
+              <Stack.Screen name="legal/[doc]" />
+              <Stack.Screen name="forgot-password" />
+              <Stack.Screen name="watchlist" />
+              <Stack.Screen name="support" />
+              <Stack.Screen name="admin/index" />
+              <Stack.Screen name="admin/users" />
+              <Stack.Screen name="admin/support" />
+              <Stack.Screen name="admin/reports" />
+              <Stack.Screen name="admin/pricing" />
+              <Stack.Screen name="admin/promocodes" />
             </Stack>
           </KeyboardProvider>
         </QueryClientProvider>

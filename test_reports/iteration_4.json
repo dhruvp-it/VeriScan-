@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 4 backend regression PASSED: 22/22 pytest cases pass on first run. Coverage: legal terms/privacy (version+effective+content>1000 chars), T&C-gated register (missing/mismatched rejected with 400; matching succeeds and returns role='user'), admin login (dhruvpateld230@gmail.com/strongpass123 -> role='admin'), admin overview with all numeric stats, admin users list with email_masked and NO raw email/password_hash, non-admin token blocked with 403 across 6 admin endpoints, suspend->403 login->reactivate->200 login flow, self-serve password reset (forgot returns {status:'sent'}, DB has OTP, reset+new-password login works, old password no longer valid), invalid OTP returns 400, expired OTP (inserted with past expires_at) returns 400 with 'expired' message, support ticket end-to-end (create->my tickets->admin masked email->admin resolve->user sees resolved), report lifecycle (create->admin list open->resolve->admin list resolved), watchlist add+hydrated list with overall_health_score+delete, better-for-you alternatives (Steel-Cut oats 8901030895002 present with higher overall_health_score than seeded Rolled oats 8901030895001), multi-country /api/plans for US/USD/stripe, IN/INR/razorpay, NZ/NZD/stripe, admin /api/admin/pricing lists all 8 seeded countries (IN,US,CA,EU,GB,AE,AU,NZ) and PUT /api/admin/pricing/US persists and is reflected in public /api/plans?country=US, admin promocode create WELCOME20 percent 20 -> public /api/promocodes/WELCOME20 returns it -> DELETE marks inactive -> public lookup returns 404. Email masking helper verified on both /admin/users and /admin/support responses. OCR endpoint and Stripe checkout intentionally skipped per request.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_4.py",
+    "/app/test_reports/pytest/iteration_4.xml"
+  ],
+  "action_items": [
+    "Iteration-4 backend surface is stable. Prior iteration_3 findings (personalized_match bug on fragranced product, remote_lookup blocking event loop with sync requests, consume_scan decrementing before 404 product check, Stripe webhook trusting client metadata, server.py at ~1040 lines) still apply and should be addressed in Iteration 5. Note: server.py has now grown past the 700-line split threshold — recommend extracting admin routes, payments, and OCR helper into separate modules."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1040 lines — well above the 700-line guideline. Split into auth/admin/products/payments/ocr modules.",
+    "remote_lookup still uses sync requests inside an async FastAPI handler; migrate to httpx.AsyncClient to avoid event-loop blocking.",
+    "consume_scan is called BEFORE the DB/remote product resolution in some paths, so 404 lookups still burn a guest quota (already reported in iter3).",
+    "admin_promocode_create catches all exceptions to return 409, masking real errors (e.g. validation issues). Narrow to DuplicateKeyError only.",
+    "AdminPricingUpdate model repeats the country field even though the path already carries it; the implementation overwrites the payload's country from the URL, which is safe but redundant."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_4.py",
+    "/app/test_reports/pytest/iteration_4.xml",
+    "/app/test_reports/iteration_4.json"
+  ],
+  "success_rate": {
+    "backend": "100% (22/22)",
+    "frontend": "not tested (backend-only per request)"
+  },
+  "seed_data_creation": "Transient TEST users, one WELCOME20 promocode (created & cleaned up after test), and OTP rows in db.password_resets from forgot-password and one manually-inserted expired OTP. All promocode state cleaned; users left in place (no cleanup requirement — emails are unique per run via uuid).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reuse /app/backend/tests/test_iteration_4.py. BASE_URL is read from EXPO_BACKEND_URL then falls back to EXPO_PUBLIC_BACKEND_URL. Mongo direct access uses mongodb://localhost:27017/test_database (matches backend/.env). Legal versions are read dynamically from /api/legal/terms and /api/legal/privacy, not hardcoded. Admin credentials from /app/memory/test_credentials.md: dhruvpateld230@gmail.com / strongpass123. Payments (Stripe checkout) and OCR (Claude) endpoints intentionally skipped."
+}
