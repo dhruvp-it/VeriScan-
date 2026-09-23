@@ -1,10 +1,14 @@
 """VeriScan FastAPI backend — auth, products, admin, watchlist, support, OCR."""
 import base64
+import hashlib
+import hmac
+import json
 import logging
 import os
 import random
 import secrets
 import string
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,11 +16,13 @@ from typing import Any, Dict, List, Optional
 
 import bcrypt
 import jwt
+import razorpay
 import requests
 import stripe
 from dotenv import load_dotenv
 from emergentintegrations.llm.chat import ImageContent, LlmChat, UserMessage
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -688,7 +694,7 @@ async def extract_product_from_images(images_base64: List[str]) -> Dict[str, Any
         elif isinstance(event, StreamDone):
             break
     # Robustly extract the first JSON object
-    import json, re as _re
+    import re as _re
     match = _re.search(r"\{[\s\S]*\}", full)
     if not match:
         raise RuntimeError("Model returned no JSON")
@@ -819,8 +825,219 @@ async def promocode_lookup(code: str, country: Optional[str] = None) -> Dict[str
 
 
 # ---------------------------------------------------------------------------
-# Payments (unchanged; multi-currency wiring will land in Iteration 3)
+# Payments — Razorpay (IN/INR) + Stripe checkout stub (non-IN)
 # ---------------------------------------------------------------------------
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+rp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if (RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET) else None
+
+
+class RazorpayOrderIn(BaseModel):
+    credits: int = Field(ge=1, le=100)
+    tier: str = Field(pattern="^(intro|standard)$")
+
+
+class RazorpayVerifyIn(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+async def india_price_paise(field: str) -> int:
+    row = await db.country_pricing.find_one({"country": "IN"}, {"_id": 0, field: 1})
+    value = (row or {}).get(field)
+    if not isinstance(value, (int, float)):
+        raise HTTPException(409, "India price is not configured")
+    # Convert rupees to paise
+    return int(round(float(value) * 100))
+
+
+async def credit_if_new(order: Dict[str, Any], payment_id: str) -> None:
+    result = await db.payment_orders.update_one(
+        {"razorpay_order_id": order["razorpay_order_id"], "credited": {"$ne": True}},
+        {"$set": {"credited": True, "status": "paid", "razorpay_payment_id": payment_id}},
+    )
+    if result.modified_count:
+        await db.entitlements.update_one(
+            {"user_id": order["user_id"]},
+            {"$inc": {"purchased_balance": order["credits"]}}, upsert=True,
+        )
+
+
+@api_router.post("/payments/razorpay/order")
+async def razorpay_order(payload: RazorpayOrderIn, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    user = await authenticated_user(authorization)
+    if not rp_client:
+        raise HTTPException(503, "Razorpay is not configured")
+    field = "scan_intro" if payload.tier == "intro" else "scan_standard"
+    unit_paise = await india_price_paise(field)
+    amount_paise = unit_paise * payload.credits
+    order = await __import__("asyncio").to_thread(rp_client.order.create, data={
+        "amount": amount_paise, "currency": "INR",
+        "receipt": "scan_" + uuid.uuid4().hex[:30],
+        "notes": {"user_id": user["id"], "kind": "scan_credits", "credits": str(payload.credits), "tier": payload.tier},
+    })
+    await db.payment_orders.insert_one({
+        "razorpay_order_id": order["id"], "user_id": user["id"], "kind": "scan_credits",
+        "credits": payload.credits, "amount_paise": amount_paise,
+        "status": "created", "credited": False, "created_at": time.time(),
+    })
+    return {
+        "key_id": RAZORPAY_KEY_ID, "order_id": order["id"],
+        "amount": amount_paise, "currency": "INR",
+        "description": f"{payload.credits} VeriScan credit{'s' if payload.credits > 1 else ''}",
+    }
+
+
+@api_router.post("/payments/razorpay/verify")
+async def razorpay_verify(payload: RazorpayVerifyIn, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    user = await authenticated_user(authorization)
+    if not rp_client:
+        raise HTTPException(503, "Razorpay is not configured")
+    order = await db.payment_orders.find_one({"razorpay_order_id": payload.razorpay_order_id, "user_id": user["id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    try:
+        rp_client.utility.verify_payment_signature({
+            "razorpay_order_id": payload.razorpay_order_id,
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "razorpay_signature": payload.razorpay_signature,
+        })
+    except Exception:
+        raise HTTPException(400, "Invalid payment signature")
+    await credit_if_new(order, payload.razorpay_payment_id)
+    return {"ok": True, "credits": order["credits"]}
+
+
+@api_router.get("/payments/razorpay/checkout/{order_id}", response_class=HTMLResponse)
+async def razorpay_checkout_page(order_id: str) -> str:
+    """Hosted checkout page rendered inside the mobile WebView or web browser.
+    Uses callback_url + redirect:true so we stay out of the popup flow."""
+    order = await db.payment_orders.find_one({"razorpay_order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    order_json = json.dumps({
+        "key_id": RAZORPAY_KEY_ID, "amount": order["amount_paise"], "currency": "INR",
+        "order_id": order["razorpay_order_id"],
+        "description": f"{order['credits']} VeriScan credits",
+    })
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VeriScan checkout</title>
+<style>
+  body {{ font-family: -apple-system, system-ui, sans-serif; background: #fdfcfa; color: #1a1c19;
+        display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
+  .card {{ text-align: center; padding: 28px; }}
+  .spinner {{ width: 36px; height: 36px; border-radius: 50%; border: 4px solid #e8f5e9;
+             border-top-color: #2e7d32; animation: spin 0.9s linear infinite; margin: 0 auto 16px; }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="spinner"></div>
+  <p>Opening secure Razorpay checkout…</p>
+</div>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+const order = {order_json};
+const callbackUrl = "{"/api/payments/razorpay/callback"}";
+const rzp = new Razorpay({{
+  key: order.key_id,
+  amount: order.amount,
+  currency: order.currency,
+  name: "VeriScan",
+  description: order.description,
+  order_id: order.order_id,
+  callback_url: callbackUrl,
+  redirect: true,
+  theme: {{ color: "#2e7d32" }},
+  modal: {{ ondismiss: () => {{ window.location.href = "/api/payments/razorpay/cancelled"; }} }},
+}});
+rzp.open();
+</script>
+</body>
+</html>"""
+
+
+@api_router.get("/payments/razorpay/cancelled", response_class=HTMLResponse)
+async def razorpay_cancelled() -> str:
+    return """<!doctype html><html><body style="font-family:system-ui;text-align:center;padding:40px">
+<h2>Payment cancelled</h2>
+<p>You can close this window and return to VeriScan.</p>
+</body></html>"""
+
+
+@api_router.post("/payments/razorpay/callback")
+async def razorpay_callback(request: Request) -> HTMLResponse:
+    """Razorpay redirects here with form-encoded payment fields. We verify the
+    signature and credit the user; then render a simple confirmation page."""
+    form = await request.form()
+    order_id = str(form.get("razorpay_order_id", ""))
+    payment_id = str(form.get("razorpay_payment_id", ""))
+    signature = str(form.get("razorpay_signature", ""))
+    if not order_id or not payment_id or not signature:
+        return HTMLResponse("<html><body><h3>Missing payment data.</h3></body></html>", status_code=400)
+    order = await db.payment_orders.find_one({"razorpay_order_id": order_id}, {"_id": 0})
+    if not order:
+        return HTMLResponse("<html><body><h3>Order not found.</h3></body></html>", status_code=404)
+    if rp_client:
+        try:
+            rp_client.utility.verify_payment_signature({
+                "razorpay_order_id": order_id, "razorpay_payment_id": payment_id, "razorpay_signature": signature,
+            })
+        except Exception:
+            return HTMLResponse("<html><body><h3>Signature verification failed.</h3></body></html>", status_code=400)
+        await credit_if_new(order, payment_id)
+    return HTMLResponse("""<!doctype html><html><body style="font-family:system-ui;text-align:center;padding:40px">
+<h2 style="color:#2e7d32">Payment received</h2>
+<p>Your credits are being added. Close this window and return to VeriScan.</p>
+</body></html>""")
+
+
+@api_router.post("/payments/razorpay/webhook")
+async def razorpay_webhook(request: Request) -> Dict[str, bool]:
+    raw = await request.body()
+    supplied = request.headers.get("x-razorpay-signature", "")
+    expected = hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, supplied):
+        raise HTTPException(400, "Bad signature")
+    payload = json.loads(raw)
+    event_id = request.headers.get("x-razorpay-event-id") or hashlib.sha256(raw).hexdigest()
+    try:
+        await db.webhook_events.insert_one({"event_id": event_id, "event": payload.get("event"), "received_at": time.time()})
+    except Exception as exc:  # noqa: BLE001
+        # DuplicateKeyError (code 11000) → acknowledge; anything else re-raise
+        if getattr(exc, "code", None) != 11000 and "duplicate" not in str(exc).lower():
+            raise
+        return {"ok": True}
+    event = payload.get("event", "")
+    entity = payload.get("payload", {})
+    if event in ("order.paid", "payment.captured"):
+        pay = entity.get("payment", {}).get("entity", {})
+        order_id = pay.get("order_id")
+        order = await db.payment_orders.find_one({"razorpay_order_id": order_id}, {"_id": 0})
+        if order:
+            await credit_if_new(order, pay.get("id", ""))
+    elif event == "subscription.charged":
+        sub = entity.get("subscription", {}).get("entity", {})
+        await db.subscriptions.update_one(
+            {"razorpay_subscription_id": sub.get("id")},
+            {"$set": {"status": "active", "last_charged_at": time.time()}},
+        )
+    elif event in ("subscription.pending", "subscription.halted", "subscription.cancelled"):
+        sub = entity.get("subscription", {}).get("entity", {})
+        await db.subscriptions.update_one(
+            {"razorpay_subscription_id": sub.get("id")},
+            {"$set": {"status": event.replace("subscription.", "")}},
+        )
+    return {"ok": True}
+
+
 @api_router.post("/payments/subscription-session")
 async def subscription_session(payload: SubscriptionPurchase, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     user = await authenticated_user(authorization)
@@ -1014,6 +1231,9 @@ async def seed_database() -> None:
         await db.country_pricing.update_one({"country": entry["country"]}, {"$setOnInsert": entry}, upsert=True)
     # Ensure a promocode uniqueness index
     await db.promocodes.create_index("code", unique=True)
+    await db.payment_orders.create_index("razorpay_order_id", unique=True)
+    await db.webhook_events.create_index("event_id", unique=True)
+    await db.subscriptions.create_index("razorpay_subscription_id", unique=True)
     # Seed admin user
     existing = await db.users.find_one({"email": ADMIN_SEED_EMAIL}, {"_id": 0})
     if existing:

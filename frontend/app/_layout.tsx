@@ -33,6 +33,7 @@ export default function RootLayout() {
               <Stack.Screen name="product/[barcode]" />
               <Stack.Screen name="contribute/[barcode]" />
               <Stack.Screen name="plans" options={{ presentation: "modal" }} />
+              <Stack.Screen name="checkout" options={{ presentation: "modal" }} />
               <Stack.Screen name="preferences" options={{ presentation: "modal" }} />
               <Stack.Screen name="legal/[doc]" />
               <Stack.Screen name="forgot-password" />

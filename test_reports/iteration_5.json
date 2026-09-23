@@ -1,0 +1,34 @@
+{
+  "summary": "Razorpay payment integration (iteration 3 request) fully tested — backend only. All 11 pytest cases passed against the public URL. Order creation (intro ₹5/credit → 5000 paise for 10 credits; standard ₹15/credit → 15000 paise), tier validation (422), auth (401), verify endpoint (bad signature 400 with no credit, valid HMAC signature credits wallet, replay idempotent), hosted checkout HTML page (contains checkout.razorpay.com script + callback_url, 404 for unknown order), and webhook (bad signature 400, payment.captured credits once, duplicate x-razorpay-event-id deduped) all behave correctly. Real Razorpay test-mode orders were created (order_id prefix 'order_').",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/payments/razorpay/order", "issue": "rp_client.order.create() is a synchronous blocking call inside an async endpoint (server.py:876) — blocks the event loop during Razorpay API latency. Consider asyncio.to_thread."},
+      {"endpoint": "POST /api/payments/razorpay/webhook", "issue": "Bare 'except Exception' on webhook_events insert (server.py:1013) treats ANY DB error as a duplicate event and silently returns ok=True — transient Mongo failures would drop legitimate events."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration_5_razorpay.py", "/app/test_reports/pytest/pytest_results_iter5.xml"],
+  "action_items": [
+    "Optional: wrap rp_client.order.create in asyncio.to_thread to avoid blocking the event loop",
+    "Optional: narrow webhook dedup exception handling to DuplicateKeyError only"
+  ],
+  "critical_code_review_comments": [
+    "credit_if_new (server.py:856) uses atomic update_one with credited != True filter — correctly idempotent for both /verify and webhook paths",
+    "Webhook signature verified with hmac.compare_digest over raw body before json.loads — correct",
+    "India pricing (scan_intro=5, scan_standard=15 INR) seeded to country_pricing on startup and converted to paise correctly",
+    "Stripe subscription endpoint remains a stub (503 without STRIPE_SECRET_KEY) — as specified in requirements"
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_5_razorpay.py"],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "N/A (not requested)"},
+  "seed_data_creation": "Created fresh test users (rz_*@example.com) via /api/auth/register; each placed real Razorpay test-mode orders. No production/seed data modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Razorpay flow verified end-to-end in test mode. Valid payment signatures can be computed as hmac.new(RAZORPAY_KEY_SECRET, (order_id+'|'+payment_id).encode(), sha256).hexdigest(); webhook signatures use RAZORPAY_WEBHOOK_SECRET over the raw request body with x-razorpay-event-id for dedup. Test file: /app/backend/tests/test_iteration_5_razorpay.py (run with pytest -n auto).",
+  "rca_of_issue": "No bugs found. Razorpay integration is correctly implemented: orders created via real Razorpay test API, amounts derived from seeded India pricing (₹5 intro / ₹15 standard), signature verification via razorpay SDK utility, atomic credit guard prevents double-crediting across /verify, /callback, and /webhook paths."
+}

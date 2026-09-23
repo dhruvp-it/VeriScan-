@@ -4,6 +4,7 @@ import { storage } from "@/src/utils/storage";
 
 const configuredUrl = Constants.expoConfig?.extra?.backendUrl ?? process.env.EXPO_PUBLIC_BACKEND_URL;
 const API_ROOT = `${String(configuredUrl ?? "").replace(/\/$/, "")}/api`;
+export const BACKEND_URL = String(configuredUrl ?? "").replace(/\/$/, "");
 export const TOKEN_KEY = "veriscan_auth_token";
 export const GUEST_KEY = "veriscan_guest_id";
 
@@ -129,10 +130,14 @@ export const api = {
   mySupport: () => request<SupportTicket[]>("/support/mine"),
   submitReport: (barcode: string, reason: string) => request<{ id: string; status: string }>("/reports", { method: "POST", body: JSON.stringify({ barcode, reason }) }),
 
-  // Plans
+  // Plans & payments
   plans: (country?: string) => request<PlansResponse>(`/plans${country ? `?country=${country}` : ""}`),
   promocode: (code: string, country?: string) => request<Promocode>(`/promocodes/${encodeURIComponent(code)}${country ? `?country=${country}` : ""}`),
   subscription: (plan: string, country?: string) => request<{ url: string }>("/payments/subscription-session", { method: "POST", body: JSON.stringify({ plan, country }) }),
+  razorpayOrder: (credits: number, tier: "intro" | "standard") =>
+    request<{ key_id: string; order_id: string; amount: number; currency: string; description: string }>(
+      "/payments/razorpay/order", { method: "POST", body: JSON.stringify({ credits, tier }) },
+    ),
 
   // Admin
   adminOverview: () => request<{ users: number; suspended: number; open_tickets: number; open_reports: number; products: number; contributions_pending: number }>("/admin/overview"),

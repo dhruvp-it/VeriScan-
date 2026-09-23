@@ -9,9 +9,18 @@ AI product-health & ingredient intelligence app for global users. Barcode scanne
 - **LLM**: Claude Sonnet 4.6 via Emergent LLM Key (OCR extraction on contribution photos)
 - **Email**: Emergent-managed Resend (password reset OTP, watchlist alerts, admin reset codes)
 - **External data**: Open Food Facts + Open Beauty Facts
-- **Payments** (planned Iter 3): Razorpay (IN) + Stripe with Apple Pay (US/CA/EU/GB/AE/AU/NZ) + PPP pricing table already wired
+- **Payments** (live): Razorpay for India (INR, test keys configured); Stripe for non-IN countries planned
 
-## Shipped (Iter 1 + 2)
+### Payments (Razorpay)
+- `POST /api/payments/razorpay/order` — creates INR order in paise; unit price read server-side from `country_pricing` IN row; amount snapshotted on the order
+- `POST /api/payments/razorpay/verify` — verifies HMAC signature; credits wallet exactly once
+- `GET /api/payments/razorpay/checkout/{order_id}` — hosted checkout HTML page (WebView / web fallback), uses `callback_url` + `redirect:true`
+- `POST /api/payments/razorpay/callback` — form-redirect callback after payment; verifies signature and credits idempotently
+- `POST /api/payments/razorpay/webhook` — HMAC-SHA256 over raw body; handles `order.paid`, `payment.captured`, `subscription.*`; dedup by `x-razorpay-event-id`
+- Frontend: `app/checkout.tsx` opens the hosted page in a `WebView` on native or navigates on web. Plans screen "Buy 10" buttons wired to it
+- Unique indexes on `razorpay_order_id`, `razorpay_subscription_id`, `webhook_events.event_id` to prevent double-credit
+
+## Shipped (Iter 1 + 2 + 3)
 ### User-facing
 - Onboarding preferences (dietary, health targets, ingredient sensitivities)
 - Guest mode with 3 free scans (device fingerprint in secure storage)
@@ -50,11 +59,11 @@ AI product-health & ingredient intelligence app for global users. Barcode scanne
 - Admin actions logged in DB (support_tickets, reports, entitlements records)
 - Email guardrails enforced via `_assert_safe_email` — blocks credential harvesting, non-https links, form fields, homoglyph impersonation
 
-## Pending (Iter 3)
-- Razorpay checkout (India)
-- Stripe with Apple Pay for US/CA/EU/GB/AE/AU/NZ
+## Pending (Iter 4+)
+- Stripe checkout for US/CA/EU/GB/AE/AU/NZ with Apple Pay
 - Wire promo code redemption at checkout
 - Product image caching via Emergent Object Storage
+- After deploy: register the Razorpay webhook at `https://<your-app>.emergent.host/api/payments/razorpay/webhook` with `RAZORPAY_WEBHOOK_SECRET` for live payments
 
 ## API summary
 - `POST /api/auth/{register,login,forgot-password,reset-password}`
@@ -71,8 +80,15 @@ AI product-health & ingredient intelligence app for global users. Barcode scanne
 - `POST /api/admin/promocodes` · `DELETE /api/admin/promocodes/{code}`
 
 ## Testing status
-- Iter 2 backend regression: **22/22 pass** (JUnit at `/app/test_reports/pytest/iteration_4.xml`)
+- Iter 3 backend regression: **22/22 pass** (legal, admin RBAC, OTP reset, watchlist, alternatives, multi-country pricing, promocodes, masked-email invariant)
+- Iter 3 Razorpay payments: **11/11 pass** — order creation (₹5/₹15 tiers), signature verification, idempotent crediting, checkout page, webhook HMAC + dedup
 - Test credentials in `/app/memory/test_credentials.md`
+
+## Razorpay production setup (when going live)
+1. In Razorpay Dashboard (Live Mode): generate **Live** Key ID + Key Secret
+2. Update `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` in deployment secrets
+3. Webhooks tab: add `https://<your-deployed-app>/api/payments/razorpay/webhook` with the same `RAZORPAY_WEBHOOK_SECRET`; subscribe to `order.paid`, `payment.captured`, `subscription.activated`, `subscription.charged`, `subscription.pending`, `subscription.halted`, `subscription.cancelled`
+4. Test with a real small payment and reconcile against the `payment_orders` collection
 
 ## Notes for next iteration (payments)
 - `country_pricing` collection is the single source of truth — the admin panel already edits it

@@ -63,8 +63,8 @@ export default function PlansRoute() {
                 <Text style={styles.muted}>Unlimited scans</Text>
               </View>
               <View style={styles.planPriceBox}>
-                <Text style={styles.planPrice}>₹{plan.price}</Text>
-                <Text style={styles.strike}>₹{plan.regular_price}/{plan.period}</Text>
+                <Text style={styles.planPrice}>{plans.symbol}{plan.price}</Text>
+                <Text style={styles.strike}>{plans.symbol}{plan.regular_price}/{plan.period}</Text>
               </View>
               <Pressable
                 testID={`plan-choose-${plan.id}`}
@@ -81,16 +81,32 @@ export default function PlansRoute() {
           <Text style={styles.cardTitle}>Pay per scan</Text>
           <View style={styles.tierRow}>
             <View style={styles.tierPill}>
-              <Text style={styles.tierNumber}>₹{plans.scan_intro.price}</Text>
+              <Text style={styles.tierNumber}>{plans.symbol}{plans.scan_intro.price}</Text>
               <Text style={styles.muted}>{plans.scan_intro.label}</Text>
+              <Pressable
+                testID="buy-intro-credits"
+                onPress={() => router.push({ pathname: "/checkout", params: { credits: "10", tier: "intro" } })}
+                style={styles.buyButton}
+              >
+                <Text style={styles.buyButtonText}>Buy 10</Text>
+              </Pressable>
             </View>
             <View style={styles.tierPill}>
-              <Text style={styles.tierNumber}>₹{plans.scan_standard.price}</Text>
+              <Text style={styles.tierNumber}>{plans.symbol}{plans.scan_standard.price}</Text>
               <Text style={styles.muted}>{plans.scan_standard.label}</Text>
+              <Pressable
+                testID="buy-standard-credits"
+                onPress={() => router.push({ pathname: "/checkout", params: { credits: "10", tier: "standard" } })}
+                style={styles.buyButton}
+              >
+                <Text style={styles.buyButtonText}>Buy 10</Text>
+              </Pressable>
             </View>
           </View>
           <Text style={styles.disclaimer}>
-            Payment method: card, Apple Pay & UPI on native builds. Multi-currency PPP pricing rolls out with the next update.
+            {plans.provider === "razorpay"
+              ? "India pricing paid via Razorpay · UPI, cards, netbanking & wallets."
+              : "Paid via Stripe · Apple Pay available on native iOS builds."}
           </Text>
         </View>
       </ScrollView>
@@ -121,5 +137,7 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   tierRow: { flexDirection: "row", gap: 10, marginTop: 12 },
   tierPill: { flex: 1, backgroundColor: colors.surface, borderRadius: 16, padding: 14 },
   tierNumber: { color: colors.brandPrimary, fontSize: 22, fontWeight: "900" },
+  buyButton: { minHeight: 40, borderRadius: 12, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", paddingHorizontal: 14, marginTop: 10 },
+  buyButtonText: { color: colors.onBrandPrimary, fontSize: 13, fontWeight: "800" },
   disclaimer: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 14, fontStyle: "italic" },
 }));
