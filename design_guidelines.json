@@ -1,0 +1,152 @@
+{
+  "app_name": "VeriScan",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A pristine, trustworthy food and ingredient intelligence app delivering instant safety scores, dietary matching, and clean alternatives with native iOS refinement.",
+  "color": {
+    "surface": "#FDFCFA",
+    "onSurface": "#1A1C19",
+    "surfaceSecondary": "#F4F1EA",
+    "onSurfaceSecondary": "#2C302D",
+    "surfaceTertiary": "#EAE5DC",
+    "onSurfaceTertiary": "#4A4F4C",
+    "surfaceInverse": "#111311",
+    "onSurfaceInverse": "#FDFCFA",
+    "brand": "#2E7D32",
+    "brandPrimary": "#2E7D32",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#7CB342",
+    "onBrandSecondary": "#111311",
+    "brandTertiary": "#E8F5E9",
+    "onBrandTertiary": "#1B5E20",
+    "success": "#2E7D32",
+    "onSuccess": "#FFFFFF",
+    "warning": "#FB8C00",
+    "onWarning": "#FFFFFF",
+    "error": "#E53935",
+    "onError": "#FFFFFF",
+    "info": "#0288D1",
+    "onInfo": "#FFFFFF",
+    "border": "#E2DBD0",
+    "borderStrong": "#C8BEB0",
+    "divider": "#EFECE6",
+    "muted": "#707873",
+    "onBrand": "#FFFFFF"
+  },
+  "typography": {
+    "displayFontFamily": "System",
+    "textFontFamily": "System",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Maintain generous iOS vertical rhythm, touch targets >= 44pt, and safe-area padding.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use frosted glass on sticky headers and floating bottom action bars over scrolling content.",
+      "Pair blur with translucent tinted base >= 70% opacity."
+    ],
+    "dont's": [
+      "Never blur form fields or entire content regions.",
+      "Never stack more than 2 blur surfaces on a single screen."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Onboarding & Preference Setup",
+      "purpose": "Collect lifestyle preferences, dietary targets, and sensitivities during first launch.",
+      "states": {
+        "loading": "Checking guest fingerprint in iOS Keychain...",
+        "empty": "No preferences selected. Tap pills to build your clean profile.",
+        "error": "Failed to save profile preferences. Tap Retry."
+      },
+      "layout": "FullScreen card stack with pill selectors for dietary, health targets, and ingredient sensitivities, featuring sticky bottom CTA."
+    },
+    {
+      "name": "Scanner & Camera View",
+      "purpose": "Real-time barcode scanning and OCR capture for packaged food and cosmetics.",
+      "states": {
+        "loading": "Initializing camera and Vision barcode detector...",
+        "empty": "No barcode detected. Align barcode within frame or tap Manual OCR flow.",
+        "error": "Camera permission denied. Enable camera access in settings."
+      },
+      "layout": "Camera viewfinder with translucent overlay, torch toggle, scan frame guide, and bottom tab navigation."
+    },
+    {
+      "name": "Product Detail View",
+      "purpose": "Display holistic 0-100 safety score, dietary match %, ingredient breakdown, and retailer alternatives.",
+      "states": {
+        "loading": "Analyzing ingredients and computing safety index...",
+        "empty": "Product details not available. Contribute this item.",
+        "error": "Failed to load product data. Check connection."
+      },
+      "layout": "Single-column fluid scroll with hero header, safety score ring, context card, price tier bar, expandable ingredient list, and retailer comparison table."
+    },
+    {
+      "name": "Wallet & Scan Quota",
+      "purpose": "Manage scan quota, microtransaction top-ups, and promotional subscription tiers.",
+      "states": {
+        "loading": "Fetching wallet balance and active subscription status...",
+        "empty": "No active scan credits or subscription found.",
+        "error": "Unable to verify wallet balance. Retry."
+      },
+      "layout": "Card-based dashboard showing remaining scans, microtransaction bundles (₹5/₹15 per scan), and Launch Promo subscription tiers (70% off annual)."
+    },
+    {
+      "name": "Scan History & Saved",
+      "purpose": "Browse previously scanned products, safety ratings, and personal clean index.",
+      "states": {
+        "loading": "Loading scan history...",
+        "empty": "No scan history yet. Scan your first product!",
+        "error": "Failed to load history."
+      },
+      "layout": "Filtered list view with search bar, safety score badges, and quick re-scan actions."
+    }
+  ],
+  "images": {
+    "hero_apple": {
+      "url": "https://images.unsplash.com/photo-1678942946279-c83e37f32304?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "dark": "https://images.unsplash.com/photo-1678942946279-c83e37f32304?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "alt": "Organic green apple fresh food photography"
+    },
+    "retailer_amazon": {
+      "url": "https://images.unsplash.com/photo-1649734926695-1b1664e98842?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "alt": "Amazon logo mark"
+    }
+  },
+  "instructions_to_main_agent": "Ensure all screens adhere to iOS-Native Clean guidelines. Implement safety color badges (Red #E53935, Orange #FB8C00, Yellow #FDD835, Light Green #7CB342, Emerald #2E7D32). Keep primary CTAs sticky at bottom with safe-area padding. Provide guest quota enforcement (3 free scans) before prompting Auth. Implement INR pricing and StoreKit microtransaction wallet logic."
+}
