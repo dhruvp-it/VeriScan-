@@ -197,13 +197,15 @@ async def root() -> Dict[str, str]:
 
 
 @api_router.post("/auth/register")
-async def register(payload: AuthRequest) -> Dict[str, Any]:
+async def register(payload: AuthRequest, x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     email = payload.email.strip().lower()
     if await db.users.find_one({"email": email}, {"_id": 0}):
         raise HTTPException(409, "An account with this email already exists")
     user = {"id": str(uuid.uuid4()), "email": email, "password_hash": bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode(), "preferences": PREFERENCES.copy(), "created_at": now_iso()}
     await db.users.insert_one(user.copy())
     await db.entitlements.insert_one({"user_id": user["id"], "free_month": datetime.now(timezone.utc).strftime("%Y-%m"), "free_used": 0, "purchased_balance": 0, "intro_used": 0, "subscribed": False})
+    if x_guest_id:
+        await db.history.update_many({"user_id": f"guest:{x_guest_id}"}, {"$set": {"user_id": user["id"]}})
     return {"token": token_for(user["id"]), "user": {"id": user["id"], "email": email, "preferences": user["preferences"]}}
 
 
