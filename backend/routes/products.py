@@ -15,6 +15,7 @@ from core.product_logic import (
 )
 from ingredients_db import build_public_product, parse_ingredients
 from price_comparison import compare_for
+from routes.analytics import record as record_analytics
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ async def lookup_product(
     history_user = user["id"] if user else f"guest:{x_guest_id}"
     await db.history.insert_one({"id": str(uuid.uuid4()), "user_id": history_user,
                                   "product": result, "scanned_at": now_iso()})
+    # Anonymous analytics — no user id / email / device id is stored
+    await record_analytics("scan", barcode=barcode, category=result.get("category"))
     return result
 
 

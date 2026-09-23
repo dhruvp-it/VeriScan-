@@ -51,7 +51,19 @@ export default function AdminDuplicatesRoute() {
             const chosen = selected[key];
             return (
               <View key={key} style={styles.card} testID={`dupe-group-${idx}`}>
-                <Text style={styles.groupTitle}>{group._id.name} — {group._id.brand}</Text>
+                <View style={styles.groupHeader}>
+                  <Text style={styles.groupTitle}>{group._id.name} — {group._id.brand}</Text>
+                  {group.kind === "fuzzy" ? (
+                    <View style={styles.fuzzyChip}>
+                      <Ionicons name="sparkles" size={11} color={colors.brandSecondary} />
+                      <Text style={styles.fuzzyChipText}>AI · {group.confidence}%</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.exactChip}>
+                      <Text style={styles.exactChipText}>Exact</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.muted}>{group.count} records</Text>
                 {group.products.map((p) => (
                   <Pressable
@@ -99,7 +111,12 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   scroll: { padding: 20, gap: 12 },
   muted: { color: colors.muted, fontSize: 13, textAlign: "center", marginTop: 6 },
   card: { backgroundColor: colors.surfaceSecondary, borderRadius: 16, padding: 14, gap: 6 },
-  groupTitle: { color: colors.onSurface, fontSize: 15, fontWeight: "800" },
+  groupTitle: { color: colors.onSurface, fontSize: 15, fontWeight: "800", flex: 1 },
+  groupHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  fuzzyChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: `${colors.brandSecondary}22`, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
+  fuzzyChipText: { color: colors.brandSecondary, fontSize: 10, fontWeight: "800" },
+  exactChip: { backgroundColor: colors.surface, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
+  exactChipText: { color: colors.muted, fontSize: 10, fontWeight: "800" },
   choice: { flexDirection: "row", alignItems: "center", gap: 10, padding: 10, borderRadius: 10, backgroundColor: colors.surface, marginTop: 8 },
   choiceOn: { borderWidth: 1, borderColor: colors.brandPrimary },
   rowText: { color: colors.onSurface, fontSize: 13, fontWeight: "700" },

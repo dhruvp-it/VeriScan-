@@ -119,6 +119,21 @@ export const api = {
   profile: () => request<Profile>("/profile"),
   saveProfile: (preferences: Preferences) => request<Preferences>("/profile", { method: "PUT", body: JSON.stringify(preferences) }),
   entitlements: () => request<Entitlement>("/entitlements"),
+  termsStatus: () => request<{ registered: boolean; up_to_date: boolean; terms_version: string; privacy_version: string; accepted_terms_version?: string; accepted_privacy_version?: string }>("/profile/terms-status"),
+  acceptTerms: () => request<{ status: string; terms_version: string; privacy_version: string }>("/profile/accept-terms", { method: "POST" }),
+
+  // Analytics (anonymous — no user data attached)
+  track: (event: "scan" | "retailer_click" | "contribute" | "share", payload: { barcode?: string; retailer_id?: string; category?: string } = {}) =>
+    request<{ status: string }>("/analytics/track", { method: "POST", body: JSON.stringify({ event, ...payload }) }),
+
+  // Stripe
+  stripeStatus: (country: string) => request<{ enabled: boolean; reason?: string; currency?: string; symbol?: string; monthly?: number; yearly?: number }>(`/payments/stripe/status?country=${country}`),
+  stripeCheckout: (plan: "monthly" | "yearly", country: string) => request<{ url: string; session_id: string }>("/payments/stripe/checkout", { method: "POST", body: JSON.stringify({ plan, country }) }),
+  adminStripeToggle: (country: string, monthly: number, yearly: number) =>
+    request<{ status: string }>("/admin/pricing/stripe/toggle", { method: "POST", body: JSON.stringify({ country, monthly, yearly }) }),
+
+  // Analytics admin
+  analyticsOverview: (days: number = 30) => request<{ days: number; totals: Record<string, number>; daily: { date: string; scan: number; retailer_click: number; contribute: number; share: number }[]; top_products: { barcode: string; count: number; name: string; brand: string; category: string }[]; retailers: { retailer_id: string; count: number }[] }>(`/admin/analytics/overview?days=${days}`),
 
   // Legal
   terms: () => request<Legal>("/legal/terms"),
@@ -184,7 +199,7 @@ export const api = {
   adminPayments: () => request<{ razorpay_order_id: string; razorpay_payment_id?: string; user_id: string; kind: string; credits: number; bonus_credits?: number; amount_paise: number; created_at: number; refunded?: boolean; refund_id?: string; plan?: string; promo_code?: string | null }[]>("/admin/payments"),
   adminRefund: (paymentId: string, reason: string) =>
     request<{ refund_id: string; status: string; ticket_id: string }>("/admin/refund", { method: "POST", body: JSON.stringify({ payment_id: paymentId, reason }) }),
-  adminDuplicates: () => request<{ _id: { name: string; brand: string }; products: { barcode: string; name: string; brand: string; category: string }[]; count: number }[]>("/admin/duplicates"),
+  adminDuplicates: () => request<{ _id: { name: string; brand: string }; products: { barcode: string; name: string; brand: string; category: string; match_score?: number }[]; count: number; kind?: string; confidence?: number }[]>("/admin/duplicates"),
   adminMerge: (primary: string, dupes: string[]) =>
     request<{ merged: number; primary_barcode: string }>("/admin/products/merge", { method: "POST", body: JSON.stringify({ primary_barcode: primary, duplicate_barcodes: dupes }) }),
   adminProductBadges: (barcode: string, badges: { id: string; label: string; region: string }[]) =>

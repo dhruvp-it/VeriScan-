@@ -7,8 +7,47 @@ from fastapi import APIRouter, Header
 from core.config import PREFERENCES, db
 from core.deps import authenticated_user
 from core.models import ProfileRequest
+from legal_content import PRIVACY_VERSION, TERMS_VERSION
 
 router = APIRouter()
+
+
+class TermsAccept(ProfileRequest):
+    pass
+
+
+@router.post("/profile/accept-terms")
+async def accept_terms(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """Marks the current user as having accepted the current Terms and Privacy
+    Policy versions. Required for subscription checkout."""
+    from datetime import datetime, timezone
+    user = await authenticated_user(authorization)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {
+            "terms_accepted": {"version": TERMS_VERSION, "at": now},
+            "privacy_accepted": {"version": PRIVACY_VERSION, "at": now},
+        }},
+    )
+    return {"status": "accepted", "terms_version": TERMS_VERSION, "privacy_version": PRIVACY_VERSION}
+
+
+@router.get("/profile/terms-status")
+async def terms_status(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    if not authorization:
+        return {"registered": False, "up_to_date": True,
+                "terms_version": TERMS_VERSION, "privacy_version": PRIVACY_VERSION}
+    user = await authenticated_user(authorization)
+    ta = user.get("terms_accepted", {}) or {}
+    pa = user.get("privacy_accepted", {}) or {}
+    return {
+        "registered": True,
+        "up_to_date": ta.get("version") == TERMS_VERSION and pa.get("version") == PRIVACY_VERSION,
+        "accepted_terms_version": ta.get("version"),
+        "accepted_privacy_version": pa.get("version"),
+        "terms_version": TERMS_VERSION, "privacy_version": PRIVACY_VERSION,
+    }
 
 
 @router.get("/profile")

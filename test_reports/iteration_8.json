@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 8 verified. Backend: new suite /app/backend/tests/test_iteration_8_legal_analytics_stripe.py = 19/19 pass + 2 Stripe checkout tests skipped due to missing STRIPE_SECRET_KEY env var. Full regression (iteration_4/5/6/7) = 77/77 pass — zero regressions. Legal v2.0.0 verified (STRICT NO-REFUND, Mumbai arbitration, Consumer Protection Act 2019). Terms enforcement verified: fresh v2 users can create Razorpay orders/subscriptions; v1 users get 428 TERMS_ACCEPTANCE_REQUIRED and unblock after /api/profile/accept-terms. Anonymous analytics /api/analytics/track (scan + retailer_click), auto-fire from /api/products/lookup, /api/admin/analytics/overview totals + top_products (Organic Rolled Oats) + retailer breakdown + CSV export all work. Non-admin gets 403 on overview. Stripe status/toggle flow: status returns enabled=false with reason='free_until_admin_enables' when prices are zero; after admin toggle to $2/$20 the status flips enabled=true — but /api/payments/stripe/checkout returns **503 'Stripe is not configured yet'** because backend/.env has no STRIPE_SECRET_KEY (only STRIPE_API_KEY=sk_test_emergent is injected by the platform). Fuzzy dedup schema (kind ∈ {exact, fuzzy}, confidence 0-100, exact=100) validated on empty cluster list. Frontend: /legal/terms shows Version 2.0.0 header + STRICT NO-REFUND, NO-CANCELLATION POLICY; TermsGate modal appears for v1 users on login (tested by resetting veriscan-test@example.com to v1 in Mongo then logging in) — tapping testID='terms-gate-accept' dismisses the modal after POST /api/profile/accept-terms; /admin/analytics fully renders stat cards + retailer bar chart + top products + 14-day activity for authenticated admin.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/payments/stripe/checkout", "issue": "Returns 503 'Stripe is not configured yet' because stripe_payments.py reads STRIPE_SECRET_KEY but the environment only provides STRIPE_API_KEY=sk_test_emergent. Non-IN checkout is currently blocked in production. Reference: /app/backend/routes/stripe_payments.py:34", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "admin/analytics.tsx CSV export footer", "issue": "Literal placeholder '{backend}/api/admin/analytics/export?days=90' is displayed instead of a real URL. The template string is wrapped in backticks with a literal '{backend}' that is never interpolated. Reference: /app/frontend/app/admin/analytics.tsx:97", "testID": "n/a", "priority": "MINOR"},
+      {"component": "admin/analytics.tsx unauth state", "issue": "When an unauthenticated visitor opens /admin/analytics, the screen renders header + 'Refreshing…' spinner forever with 3x 401 console errors. There is no 'Admin only' guard or redirect. Reference: /app/frontend/app/admin/analytics.tsx:23-38", "testID": "n/a", "priority": "MINOR"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_8_legal_analytics_stripe.py",
+    "/app/test_reports/pytest/iteration_8.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix Stripe env-var mismatch. Either (a) rename os.environ.get('STRIPE_SECRET_KEY', '') → os.environ.get('STRIPE_API_KEY') in /app/backend/routes/stripe_payments.py, or (b) add STRIPE_SECRET_KEY=<test key> to /app/backend/.env. Currently /api/payments/stripe/checkout is unusable in the deployed env.",
+    "MINOR: /app/frontend/app/admin/analytics.tsx:97 — replace the literal `{backend}/api/admin/analytics/export?days=90` with a proper template string using `${API_BASE_URL}` or the configured backend URL constant.",
+    "MINOR: Add an admin-only guard to /app/frontend/app/admin/analytics.tsx (redirect to /profile or show 'Admin only' message when the current user is not authenticated as admin, matching the pattern used in other admin screens)."
+  ],
+  "critical_code_review_comments": [
+    "routes/stripe_payments.py correctly gates checkout on TERMS+PRIVACY v2 (428 when stale), correctly returns enabled=false with reason='free_until_admin_enables' while prices are zero, and correctly requires provider='stripe' — the only blocker is the env-var name.",
+    "routes/analytics.py is well-designed: no PII stored, single $inc per event, per-key (barcode/retailer) counters, cross-key retailer|barcode counter for future drill-downs, aggregation pipelines correctly scope by date range, admin_user dependency enforces role. record() wrapped in try/except so analytics never breaks UX.",
+    "routes/profile.py accept-terms + terms-status endpoints are minimal and correct; terms-status short-circuits registered=false for anonymous which lets the TermsGate stay hidden for guests.",
+    "legal_content.py TERMS_VERSION=2.0.0/PRIVACY_VERSION=2.0.0 with all required clauses present (STRICT NO-REFUND, Arbitration in Mumbai, Consumer Protection Act 2019, EU/UK/India withdrawal-right waiver, aggregate cap INR 500 / USD 6 / 3 months, class-action waiver).",
+    "routes/payments.py razorpay/order and razorpay/subscription correctly return 428 when versions mismatch — verified end-to-end.",
+    "routes/payments.py admin/duplicates now unions exact clusters (kind='exact', confidence=100) with rapidfuzz fuzzy clusters (kind='fuzzy', score_cutoff=82, same category) — schema verified; empty result on this DB is expected because seeded catalogue has no near-duplicates.",
+    "frontend TermsGate.tsx uses Modal (correct RN component) with testIDs on accept + view-terms + view-privacy; blocks navigation via full-screen Modal until acceptance succeeds. Logic (`data?.registered && !data.up_to_date`) is correct."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_8_legal_analytics_stripe.py",
+    "/app/test_reports/pytest/iteration_8.xml",
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {
+    "backend": "100% functional (19/19 iter_8 pass + 77/77 regression = 96/96; 2 Stripe checkout tests skipped due to env-var bug — see critical action item)",
+    "frontend": "100% (Legal v2.0.0 page, TermsGate re-acceptance modal, admin/analytics render — all verified on mobile viewport 390x844)"
+  },
+  "seed_data_creation": "TEST_i8_<uuid>@example.com fresh users registered via API (with v2 acceptance). Country pricing for US temporarily toggled to $2/$20 then reset to $0/$0. veriscan-test@example.com terms_accepted temporarily reset to v1 in Mongo for the terms-enforcement + TermsGate tests, then the test itself upgraded it back to v2 via /api/profile/accept-terms. Analytics collection populated with scan/retailer_click counters for barcode 8901030895001 and retailers amazon_in / amazon. No admin or production data modified.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New suite: /app/backend/tests/test_iteration_8_legal_analytics_stripe.py (21 tests total; 19 pass, 2 Stripe checkout tests skip cleanly if STRIPE_SECRET_KEY is missing). Run alongside iteration_4/5/6/7 for a 98-test regression (~22s). v1_user_token fixture resets veriscan-test@example.com to v1 acceptance in Mongo before use so the 428 path is deterministic. If STRIPE_SECRET_KEY is added to backend/.env the two skipped tests will exercise the real Stripe Checkout Session create path. Do NOT re-run stale iteration_1/2/3 suites (documented pre-existing failures).",
+  "rca_of_issue": "Stripe 503: /app/backend/routes/stripe_payments.py:34 reads STRIPE_SECRET_KEY, but the container environment injects STRIPE_API_KEY=sk_test_emergent. When the admin toggles a country to a positive price and a user with valid T&C acceptance calls /api/payments/stripe/checkout, _stripe_key() raises HTTPException(503, 'Stripe is not configured yet') before any Stripe SDK call is made. Fix in one line: change the env-var lookup to STRIPE_API_KEY (or add STRIPE_SECRET_KEY to backend/.env). All other Stripe endpoints (status, toggle) are unaffected because they never call _stripe_key()."
+}

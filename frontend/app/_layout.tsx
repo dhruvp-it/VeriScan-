@@ -6,6 +6,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
+import { TermsGate } from "@/src/components/terms-gate";
 import { GUEST_KEY } from "@/src/lib/api";
 import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
@@ -47,7 +48,9 @@ export default function RootLayout() {
               <Stack.Screen name="admin/promocodes" />
               <Stack.Screen name="admin/payments" />
               <Stack.Screen name="admin/duplicates" />
+              <Stack.Screen name="admin/analytics" />
             </Stack>
+            <TermsGate />
           </KeyboardProvider>
         </QueryClientProvider>
       </SafeAreaProvider>

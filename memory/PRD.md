@@ -68,3 +68,22 @@ AI product-health & ingredient intelligence app for global users. Barcode scanne
 - Frontend: `src/components/price-comparison.tsx` renders live prices (with MRP strikethrough) or deep-link buttons with "Search links"/"Live prices" chip; replaces the old static `product.retailers` block on the product page.
 - Preferences expanded (frontend options + backend scoring): dietary +Keto/High protein/Halal/Jain, targets +Low sodium/Weight management/Energy & focus, sensitivities +Sulfate-free/Dairy-free/Soy-free/Palm oil free.
 - Test suite: 49 passed / 10 failed — all 10 failures are stale iteration 1-3 tests (register without T&C versions, barcode 9999999999999 polluted into DB by old contribution tests). Same failures exist on pre-refactor code (18 failed there).
+
+## Iteration 8 (2026-09-23) — Legal hardening, Analytics, Stripe, Fuzzy dedup
+**Legal v2.0.0 (T&C + Privacy)** — jurisdiction-aware, strict no-refund + no-cancellation, AS-IS warranty disclaimer, liability capped at INR 500 / USD 6 or 3-month fees (lower), force-majeure + delayed-ticket disclaimer, arbitration seated in Mumbai under Arbitration Act 1996, class-action waiver, explicit consent to waive EU/UK/India digital-service withdrawal rights per EU Consumer Rights Directive Art. 16(m), UK CCR 2013 reg. 36(2), and IN Consumer Protection Act 2019. Mandatory re-acceptance enforced at (a) login (via TermsGate modal in _layout.tsx) and (b) every Razorpay + Stripe checkout call (returns 428 TERMS_ACCEPTANCE_REQUIRED).
+
+**Anonymous analytics** — `analytics_daily` MongoDB collection stores counters keyed by (date, event, key). NO user id / email / IP / device id ever stored. Events: `scan` (auto-fired inside /api/products/lookup), `retailer_click` (fired from PriceComparison component), `contribute`, `share`. Admin endpoints: GET /api/admin/analytics/overview (totals, top products, retailer breakdown, daily buckets) and GET /api/admin/analytics/export (CSV download). Admin screen at /admin/analytics with stat cards + retailer bar chart + top products + 14-day activity chart.
+
+**Stripe checkout (non-IN)** — POST /api/payments/stripe/checkout creates a Checkout Session in subscription mode with `automatic_payment_methods={enabled: true}` so Card + Apple Pay + Google Pay all show up on eligible clients. Gated: /api/payments/stripe/status returns enabled=false unless admin has toggled a positive price via POST /api/admin/pricing/stripe/toggle. Requires up-to-date T&C. STRIPE_API_KEY is expected from env; a real Stripe test/live key must be provided (placeholder in preview env fails Stripe's validation with a friendly error).
+
+**Smart fuzzy dedup** — /api/admin/duplicates now returns both exact clusters (`kind='exact'`, confidence=100) AND fuzzy clusters via RapidFuzz `token_set_ratio ≥ 82` on `brand+name` (`kind='fuzzy'`, confidence=avg%). Same-category constraint enforced. Frontend shows "AI · 87%" chip for fuzzy suggestions.
+
+**Enforcement + regression** — /api/payments/razorpay/order and /api/payments/razorpay/subscription now return 428 unless user is current-version-accepted. New endpoints /api/profile/terms-status and POST /api/profile/accept-terms. Testing agent verified 96/96 functional pass (77 regression + 19 new). Stripe integration path verified end-to-end; only real Stripe key missing.
+
+### Where analytics data is saved (user question)
+Anonymous counters live in MongoDB collection `analytics_daily` inside the `test_database` DB. To access:
+- **Admin dashboard**: /admin/analytics screen (auto-refresh)
+- **CSV download**: `GET {backend}/api/admin/analytics/export?days=90` with admin bearer token → downloads `veriscan-analytics-<date>.csv` with columns date,event,key,count,category,retailer_id,barcode.
+- **Direct Mongo**: `db.analytics_daily.find({date: {$gte: "2026-09-01"}})` on MongoDB Atlas.
+
+Data is retained indefinitely (no PII → no retention duty). If the user later wants a hosted BI dashboard we can point Metabase or Retool at the same collection.

@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -22,6 +22,7 @@ from core.models import (
     RazorpaySubscriptionIn, RazorpayVerifyIn, SubscriptionPurchase,
 )
 from core.pricing_logic import apply_promo, credit_if_new, india_price_paise
+from legal_content import PRIVACY_VERSION, TERMS_VERSION
 
 router = APIRouter()
 
@@ -70,6 +71,11 @@ async def razorpay_subscription(payload: RazorpaySubscriptionIn, authorization: 
     user = await authenticated_user(authorization)
     if not rp_client:
         raise HTTPException(503, "Razorpay is not configured")
+    # Mandatory current-version T&C acceptance for any subscription checkout
+    _terms_ok = (user.get("terms_accepted") or {}).get("version") == TERMS_VERSION
+    _privacy_ok = (user.get("privacy_accepted") or {}).get("version") == PRIVACY_VERSION
+    if not (_terms_ok and _privacy_ok):
+        raise HTTPException(428, "TERMS_ACCEPTANCE_REQUIRED")
     field = "monthly" if payload.plan == "monthly" else "yearly"
     row = await db.country_pricing.find_one({"country": "IN"}, {"_id": 0})
     price = float((row or {}).get(field, 0))
@@ -175,7 +181,9 @@ async def admin_payments(admin: Dict[str, Any] = Depends(admin_user), limit: int
 @router.get("/admin/duplicates")
 async def admin_duplicates(admin: Dict[str, Any] = Depends(admin_user)) -> Any:
     _ = admin
+    # Exact-match clusters via aggregation
     pipeline = [
+        {"$match": {"status": {"$ne": "merged"}}},
         {"$group": {"_id": {"name": {"$toLower": "$name"}, "brand": {"$toLower": "$brand"}},
                     "products": {"$push": {"barcode": "$barcode", "name": "$name", "brand": "$brand",
                                              "category": "$category", "source": "$source",
@@ -185,8 +193,60 @@ async def admin_duplicates(admin: Dict[str, Any] = Depends(admin_user)) -> Any:
         {"$sort": {"count": -1}},
         {"$limit": 50},
     ]
-    cursor = db.products.aggregate(pipeline)
-    return await cursor.to_list(50)
+    exact = await db.products.aggregate(pipeline).to_list(50)
+    for cluster in exact:
+        cluster["kind"] = "exact"; cluster["confidence"] = 100
+
+    # Fuzzy-match suggestions using RapidFuzz token-set ratio on brand+name
+    try:
+        from rapidfuzz import fuzz, process as fuzz_process  # noqa: PLC0415
+    except ImportError:
+        return exact
+
+    all_products = await db.products.find(
+        {"status": {"$ne": "merged"}, "deleted_at": {"$exists": False}},
+        {"_id": 0, "barcode": 1, "name": 1, "brand": 1, "category": 1, "image_url": 1, "source": 1, "status": 1},
+    ).to_list(2000)
+    # Skip barcodes already in exact clusters
+    exact_barcodes: set = set()
+    for cluster in exact:
+        for prod in cluster["products"]:
+            exact_barcodes.add(prod["barcode"])
+    remaining = [p for p in all_products if p["barcode"] not in exact_barcodes]
+
+    def _key(p: Dict[str, Any]) -> str:
+        return f"{(p.get('brand') or '').strip()} {(p.get('name') or '').strip()}".strip().lower()
+
+    keys = [_key(p) for p in remaining]
+    seen: set = set()
+    fuzzy_clusters: List[Dict[str, Any]] = []
+    for idx, product in enumerate(remaining):
+        if product["barcode"] in seen or not keys[idx]:
+            continue
+        matches = fuzz_process.extract(keys[idx], keys, scorer=fuzz.token_set_ratio, limit=6, score_cutoff=82)
+        cluster_members = []
+        for _match_string, score, match_idx in matches:
+            if match_idx == idx:
+                cluster_members.append({**remaining[match_idx], "match_score": 100})
+                continue
+            if remaining[match_idx]["barcode"] in seen:
+                continue
+            if remaining[match_idx].get("category") and product.get("category") \
+                    and remaining[match_idx]["category"] != product["category"]:
+                continue
+            cluster_members.append({**remaining[match_idx], "match_score": int(score)})
+        if len(cluster_members) > 1:
+            for member in cluster_members:
+                seen.add(member["barcode"])
+            avg = int(sum(m["match_score"] for m in cluster_members if m["match_score"] < 100) /
+                      max(1, len([m for m in cluster_members if m["match_score"] < 100])))
+            fuzzy_clusters.append({
+                "_id": {"name": product.get("name", ""), "brand": product.get("brand", "")},
+                "products": cluster_members, "count": len(cluster_members),
+                "kind": "fuzzy", "confidence": avg,
+            })
+    fuzzy_clusters.sort(key=lambda c: (c["confidence"], c["count"]), reverse=True)
+    return exact + fuzzy_clusters[:25]
 
 
 @router.post("/admin/products/merge")
@@ -230,6 +290,11 @@ async def razorpay_order(payload: RazorpayOrderIn, authorization: Optional[str] 
     user = await authenticated_user(authorization)
     if not rp_client:
         raise HTTPException(503, "Razorpay is not configured")
+    # Mandatory current-version T&C acceptance for scan credit purchases
+    _terms_ok2 = (user.get("terms_accepted") or {}).get("version") == TERMS_VERSION
+    _privacy_ok2 = (user.get("privacy_accepted") or {}).get("version") == PRIVACY_VERSION
+    if not (_terms_ok2 and _privacy_ok2):
+        raise HTTPException(428, "TERMS_ACCEPTANCE_REQUIRED")
     field = "scan_intro" if payload.tier == "intro" else "scan_standard"
     unit_paise = await india_price_paise(field)
     base_amount_paise = unit_paise * payload.credits
@@ -412,12 +477,12 @@ async def subscription_session(payload: SubscriptionPurchase, authorization: Opt
     user = await authenticated_user(authorization)
     if payload.plan not in {"monthly", "yearly"}:
         raise HTTPException(400, "Invalid subscription plan")
-    if not os.environ.get("STRIPE_SECRET_KEY"):
+    if not os.environ.get("STRIPE_SECRET_KEY") and not os.environ.get("STRIPE_API_KEY"):
         raise HTTPException(503, "Payments are not configured yet")
     price_id = os.environ.get("STRIPE_MONTHLY_PRICE_ID" if payload.plan == "monthly" else "STRIPE_YEARLY_PRICE_ID")
     if not price_id:
         raise HTTPException(503, "Subscription prices are not configured yet")
-    stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY") or os.environ["STRIPE_API_KEY"]
     session = stripe.checkout.Session.create(
         mode="subscription", line_items=[{"price": price_id, "quantity": 1}],
         success_url=os.environ.get("STRIPE_CHECKOUT_SUCCESS_URL", "https://example.com/success"),

@@ -14,6 +14,7 @@ const CARDS: { id: string; label: string; icon: keyof typeof Ionicons.glyphMap; 
   { id: "reports", label: "Data reports", icon: "flag-outline", path: "/admin/reports" },
   { id: "payments", label: "Payments & refunds", icon: "card-outline", path: "/admin/payments" },
   { id: "duplicates", label: "Merge duplicates", icon: "git-merge-outline", path: "/admin/duplicates" },
+  { id: "analytics", label: "Anonymous analytics", icon: "stats-chart-outline", path: "/admin/analytics" },
   { id: "pricing", label: "Country pricing", icon: "cash-outline", path: "/admin/pricing" },
   { id: "promos", label: "Promo codes", icon: "pricetag-outline", path: "/admin/promocodes" },
 ];

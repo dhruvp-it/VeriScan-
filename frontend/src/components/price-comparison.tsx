@@ -44,7 +44,7 @@ export function PriceComparison({ barcode }: { barcode: string }) {
         <Pressable
           key={`${item.retailer}-${index}`}
           testID={`live-price-${item.retailer.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
-          onPress={() => Linking.openURL(item.url)}
+          onPress={() => { api.track("retailer_click", { retailer_id: item.retailer, barcode }); Linking.openURL(item.url); }}
           style={styles.row}
         >
           <View style={styles.rowIcon}>
@@ -77,7 +77,7 @@ export function PriceComparison({ barcode }: { barcode: string }) {
             <Pressable
               key={link.id}
               testID={`retailer-link-${link.id}`}
-              onPress={() => Linking.openURL(link.url)}
+              onPress={() => { api.track("retailer_click", { retailer_id: link.id, barcode }); Linking.openURL(link.url); }}
               style={styles.row}
             >
               <View style={[styles.rowIcon, { backgroundColor: `${link.color}1A` }]}>
