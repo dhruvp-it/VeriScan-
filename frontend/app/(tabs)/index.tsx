@@ -51,13 +51,21 @@ export default function HomeTab() {
         <View style={styles.quotaCard} testID="quota-card">
           <View>
             <Text style={styles.label}>
-              {entitlement?.subscribed ? "VERISCAN PLUS" : entitlement?.registered ? "MONTHLY SCANS" : "GUEST SCANS"}
+              {entitlement?.subscribed ? "VERISCAN PLUS"
+                : entitlement?.trial_active ? "FREE TRIAL"
+                : entitlement?.registered ? "SCAN WALLET" : "GUEST SCANS"}
             </Text>
             <Text style={styles.quotaNumber} testID="quota-remaining">
-              {entitlement?.subscribed ? "∞" : entitlement?.free_remaining ?? 0}
+              {entitlement?.subscribed ? "∞"
+                : entitlement?.trial_active ? "∞"
+                : entitlement?.registered ? (entitlement?.wallet ?? 0)
+                : (entitlement?.free_remaining ?? 0)}
             </Text>
             <Text style={styles.muted}>
-              {entitlement?.subscribed ? "Unlimited active" : "free scans remaining"}
+              {entitlement?.subscribed ? "Unlimited active"
+                : entitlement?.trial_active ? `${entitlement.trial_days_remaining} days of unlimited scans`
+                : entitlement?.registered ? "credits in your wallet"
+                : "free scans remaining"}
             </Text>
           </View>
           <View style={styles.quotaCircle}>

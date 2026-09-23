@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -12,6 +12,8 @@ import { BetterForYou } from "@/src/components/better-for-you";
 import { IngredientSheet } from "@/src/components/ingredient-sheet";
 import { NutritionCard } from "@/src/components/nutrition-card";
 import { PriceBenchmark } from "@/src/components/price-benchmark";
+import { PriceComparison } from "@/src/components/price-comparison";
+import { RegulatoryBadges } from "@/src/components/regulatory-badges";
 import { useEntitlement } from "@/src/hooks/use-entitlement";
 import { api, Ingredient, Product, WatchlistItem } from "@/src/lib/api";
 import { scoreColor, scoreLabel } from "@/src/lib/scoring";
@@ -89,7 +91,7 @@ export default function ProductRoute() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.topActions}>
-          <Pressable testID="product-back" onPress={() => router.back()} style={styles.backRow}>
+          <Pressable testID="product-back" onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)"))} style={styles.backRow}>
             <Ionicons name="arrow-back" size={21} color={colors.onSurface} />
             <Text style={styles.backText}>Back</Text>
           </Pressable>
@@ -171,6 +173,7 @@ export default function ProductRoute() {
           <Text style={styles.body}>
             {product.description} Our index weighs every listed ingredient and lower-scoring items are penalized more strongly.
           </Text>
+          <RegulatoryBadges badges={product.badges} />
           <Text style={styles.disclaimer}>
             Date of first appearance is estimated based on global web registry logs and retail listings. Analysis is informational, not medical advice.
           </Text>
@@ -205,32 +208,7 @@ export default function ProductRoute() {
           </Pressable>
         ))}
 
-        {product.retailers.length > 0 ? (
-          <>
-            <View style={styles.rowBetween}>
-              <Text style={styles.sectionTitle}>Buying options</Text>
-              <Text style={styles.muted}>INR</Text>
-            </View>
-            {product.retailers.map((retailer) => (
-              <Pressable
-                key={retailer.name}
-                testID={`retailer-${retailer.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
-                onPress={() => Linking.openURL(retailer.url)}
-                style={styles.retailerRow}
-              >
-                <View style={styles.retailerIcon}>
-                  <Ionicons name="bag-outline" size={18} color={colors.brandPrimary} />
-                </View>
-                <View style={styles.retailerCopy}>
-                  <Text style={styles.ingredientName}>{retailer.name}</Text>
-                  <Text style={styles.muted}>Live price</Text>
-                </View>
-                <Text style={styles.price}>₹{retailer.price}</Text>
-                <Ionicons name="open-outline" size={17} color={colors.muted} />
-              </Pressable>
-            ))}
-          </>
-        ) : null}
+        <PriceComparison barcode={product.barcode} />
 
         <BetterForYou barcode={barcode as string} />
 

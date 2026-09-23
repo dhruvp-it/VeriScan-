@@ -16,6 +16,18 @@ export type Nutrition = {
   fiber_g: number | null; salt_g: number | null;
 };
 export type Retailer = { name: string; price: number; url: string };
+export type Badge = { id: string; label: string; region: string };
+export type CompareProduct = {
+  retailer: string; title: string; url: string;
+  price_inr: number | null; mrp_inr: number | null;
+  image: string | null; rating: number | null; available: boolean | null;
+};
+export type DeepLink = { id: string; name: string; icon: string; color: string; url: string };
+export type CompareResponse = {
+  query: string; live_enabled: boolean; fetched_at: number;
+  products: CompareProduct[]; deep_links: DeepLink[];
+};
+
 export type Product = {
   id: string; barcode: string; name: string; brand: string; category: string; description: string;
   dietary_type: string; origin_country: string; manufactured_in: string; first_detected_year: number;
@@ -24,11 +36,13 @@ export type Product = {
   ingredients: Ingredient[]; retailers: Retailer[];
   overall_health_score: number; personal_match: number;
   nutrition_per_100g: Nutrition | null;
+  badges?: Badge[];
   scan?: { remaining: number | null; source: string };
 };
 export type Entitlement = {
   registered: boolean; free_remaining: number; wallet: number; subscribed: boolean;
   email: string | null; role: string;
+  trial_active: boolean; trial_days_remaining: number;
 };
 export type Profile = { email: string | null; preferences: Preferences; registered: boolean; role: string };
 export type Legal = { version: string; effective: string; content: string };
@@ -112,10 +126,11 @@ export const api = {
 
   // Products
   lookup: (barcode: string) => request<Product>(`/products/lookup?barcode=${encodeURIComponent(barcode)}`),
+  compare: (barcode: string) => request<CompareResponse>(`/products/compare?barcode=${encodeURIComponent(barcode)}`),
   alternatives: (barcode: string) => request<Product[]>(`/products/alternatives?barcode=${encodeURIComponent(barcode)}`),
   history: () => request<{ product: Product; scanned_at: string }[]>("/history"),
   contribute: (payload: { barcode: string; product_name?: string; brand?: string; notes?: string; images: string[] }) =>
-    request<{ status: string; extracted?: Record<string, unknown>; ocr_error?: string }>("/contributions", { method: "POST", body: JSON.stringify(payload) }),
+    request<{ status: string; contribution_id: string; product?: Product; ocr_error?: string }>("/contributions", { method: "POST", body: JSON.stringify(payload) }),
 
   // Watchlist & notifications
   watchlist: () => request<WatchlistItem[]>("/watchlist"),
@@ -134,9 +149,17 @@ export const api = {
   plans: (country?: string) => request<PlansResponse>(`/plans${country ? `?country=${country}` : ""}`),
   promocode: (code: string, country?: string) => request<Promocode>(`/promocodes/${encodeURIComponent(code)}${country ? `?country=${country}` : ""}`),
   subscription: (plan: string, country?: string) => request<{ url: string }>("/payments/subscription-session", { method: "POST", body: JSON.stringify({ plan, country }) }),
-  razorpayOrder: (credits: number, tier: "intro" | "standard") =>
-    request<{ key_id: string; order_id: string; amount: number; currency: string; description: string }>(
-      "/payments/razorpay/order", { method: "POST", body: JSON.stringify({ credits, tier }) },
+  razorpayOrder: (credits: number, tier: "intro" | "standard", promoCode?: string) =>
+    request<{ key_id: string; order_id: string; amount: number; base_amount: number; discount: number; bonus_credits: number; currency: string; description: string }>(
+      "/payments/razorpay/order", { method: "POST", body: JSON.stringify({ credits, tier, promo_code: promoCode }) },
+    ),
+  razorpaySubscription: (plan: "monthly" | "yearly", promoCode?: string) =>
+    request<{ key_id: string; order_id: string; amount: number; base_amount: number; discount: number; currency: string; description: string }>(
+      "/payments/razorpay/subscription", { method: "POST", body: JSON.stringify({ plan, promo_code: promoCode }) },
+    ),
+  promocodePreview: (code: string, basePaise: number, country: string = "IN") =>
+    request<{ amount: number; discount: number; bonus_credits: number; kind: string | null }>(
+      "/promocodes/preview", { method: "POST", body: JSON.stringify({ code, base_paise: basePaise, country }) },
     ),
 
   // Admin
@@ -158,4 +181,12 @@ export const api = {
   adminReports: (status?: string) => request<Report[]>(`/admin/reports${status ? `?status=${status}` : ""}`),
   adminReportUpdate: (id: string, status: string, adminNote?: string) =>
     request<{ status: string }>(`/admin/reports/${id}`, { method: "PUT", body: JSON.stringify({ status, admin_note: adminNote }) }),
+  adminPayments: () => request<{ razorpay_order_id: string; razorpay_payment_id?: string; user_id: string; kind: string; credits: number; bonus_credits?: number; amount_paise: number; created_at: number; refunded?: boolean; refund_id?: string; plan?: string; promo_code?: string | null }[]>("/admin/payments"),
+  adminRefund: (paymentId: string, reason: string) =>
+    request<{ refund_id: string; status: string; ticket_id: string }>("/admin/refund", { method: "POST", body: JSON.stringify({ payment_id: paymentId, reason }) }),
+  adminDuplicates: () => request<{ _id: { name: string; brand: string }; products: { barcode: string; name: string; brand: string; category: string }[]; count: number }[]>("/admin/duplicates"),
+  adminMerge: (primary: string, dupes: string[]) =>
+    request<{ merged: number; primary_barcode: string }>("/admin/products/merge", { method: "POST", body: JSON.stringify({ primary_barcode: primary, duplicate_barcodes: dupes }) }),
+  adminProductBadges: (barcode: string, badges: { id: string; label: string; region: string }[]) =>
+    request<{ status: string }>(`/admin/products/${barcode}/badges`, { method: "PUT", body: JSON.stringify({ badges_extra: badges, badges_override: null }) }),
 };

@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useRef, useState } from "react";
@@ -24,6 +25,7 @@ export default function ContributeRoute() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { barcode } = useLocalSearchParams<{ barcode: string }>();
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
@@ -43,9 +45,18 @@ export default function ContributeRoute() {
         if (photo?.base64) setImages((prev) => [...prev, photo.base64!]);
       }
       if (step === STEPS.length - 1) {
-        await api.contribute({ barcode: barcode as string, product_name: name, notes, images });
-        setMessage("Thanks for helping VeriScan grow. We'll verify and add this product soon.");
-        setTimeout(() => router.back(), 1500);
+        const result = await api.contribute({ barcode: barcode as string, product_name: name, notes, images });
+        if (result.product) {
+          setMessage("Analysis ready. Opening report…");
+          queryClient.setQueryData(["product", barcode], result.product);
+          queryClient.invalidateQueries({ queryKey: ["history"] });
+          setTimeout(() => router.replace({ pathname: "/product/[barcode]", params: { barcode: barcode as string } }), 700);
+        } else {
+          setMessage(result.ocr_error
+            ? `Couldn't read the label clearly: ${result.ocr_error}. We've queued it for manual review.`
+            : "Thanks for contributing. We'll verify and add this product soon.");
+          setTimeout(() => router.back(), 1500);
+        }
       } else {
         setStep(step + 1);
       }

@@ -45,6 +45,8 @@ export default function RootLayout() {
               <Stack.Screen name="admin/reports" />
               <Stack.Screen name="admin/pricing" />
               <Stack.Screen name="admin/promocodes" />
+              <Stack.Screen name="admin/payments" />
+              <Stack.Screen name="admin/duplicates" />
             </Stack>
           </KeyboardProvider>
         </QueryClientProvider>

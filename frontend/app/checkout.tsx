@@ -15,9 +15,14 @@ export default function CheckoutRoute() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { credits, tier } = useLocalSearchParams<{ credits?: string; tier?: string }>();
+  const { credits, tier, promo, kind, plan } = useLocalSearchParams<{
+    credits?: string; tier?: string; promo?: string; kind?: string; plan?: string;
+  }>();
   const creditsNum = Math.max(1, Math.min(100, parseInt(credits ?? "1", 10) || 1));
   const tierVal: "intro" | "standard" = tier === "intro" ? "intro" : "standard";
+  const isSubscription = kind === "subscription";
+  const planVal: "monthly" | "yearly" = plan === "yearly" ? "yearly" : "monthly";
+  const promoCode = (promo ?? "").trim() || undefined;
 
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "failed">("idle");
@@ -27,7 +32,9 @@ export default function CheckoutRoute() {
     (async () => {
       setStatus("loading");
       try {
-        const order = await api.razorpayOrder(creditsNum, tierVal);
+        const order = isSubscription
+          ? await api.razorpaySubscription(planVal, promoCode)
+          : await api.razorpayOrder(creditsNum, tierVal, promoCode);
         const url = `${BACKEND_URL}/api/payments/razorpay/checkout/${order.order_id}`;
         if (Platform.OS === "web") {
           window.location.assign(url);
@@ -39,7 +46,7 @@ export default function CheckoutRoute() {
         setStatus("failed");
       }
     })();
-  }, [creditsNum, tierVal]);
+  }, [creditsNum, tierVal, promoCode, isSubscription, planVal]);
 
   const onNavChange = (navState: { url: string }) => {
     const url = navState.url;
@@ -91,7 +98,9 @@ export default function CheckoutRoute() {
           </View>
           <Text style={styles.big}>Payment successful</Text>
           <Text style={styles.body}>
-            {creditsNum} credit{creditsNum > 1 ? "s are" : " is"} being added to your wallet.
+            {isSubscription
+              ? `Your ${planVal} plan is active. Enjoy unlimited scans.`
+              : `${creditsNum} credit${creditsNum > 1 ? "s are" : " is"} being added to your wallet.`}
           </Text>
           <Pressable testID="checkout-done" onPress={close} style={styles.primary}>
             <Text style={styles.primaryText}>Done</Text>

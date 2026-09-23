@@ -1,14 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import {
+  Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/lib/api";
 import { makeStyles, useTheme } from "@/src/theme";
 
 const FALLBACK_PLANS = {
-  launch_promo: true,
+  launch_promo: true, country: "IN", currency: "INR", symbol: "₹", provider: "razorpay",
   scan_intro: { price: 5, label: "First 20 purchased scans" },
   scan_standard: { price: 15, label: "After introductory credits" },
   subscriptions: [
@@ -22,20 +25,35 @@ export default function PlansRoute() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { data: plans } = useQuery({
-    queryKey: ["plans"],
-    queryFn: () => api.plans(),
-    initialData: FALLBACK_PLANS,
-  });
+  const [promo, setPromo] = useState("");
+  const [promoValid, setPromoValid] = useState<{ discount: number; kind?: string | null; bonus?: number } | null>(null);
+  const [promoError, setPromoError] = useState("");
+  const { data: plans } = useQuery({ queryKey: ["plans"], queryFn: () => api.plans(), initialData: FALLBACK_PLANS });
 
-  const subscribe = async (plan: string) => {
+  const applyPromo = async () => {
+    setPromoError(""); setPromoValid(null);
+    if (!promo.trim()) return;
     try {
-      const result = await api.subscription(plan);
-      const { Linking } = await import("react-native");
-      await Linking.openURL(result.url);
-    } catch {
-      // Stripe not configured yet in preview — silently ignore.
+      // Preview against a nominal ₹100 base so user sees discount kind
+      const preview = await api.promocodePreview(promo.trim(), 10000);
+      setPromoValid({ discount: preview.discount, kind: preview.kind, bonus: preview.bonus_credits });
+    } catch (e) {
+      setPromoError((e as Error).message);
     }
+  };
+
+  const goBuy = (credits: number, tier: "intro" | "standard") => {
+    router.push({
+      pathname: "/checkout",
+      params: { credits: String(credits), tier, promo: promoValid ? promo.trim() : "" },
+    });
+  };
+
+  const goSubscribe = (plan: "monthly" | "yearly") => {
+    router.push({
+      pathname: "/checkout",
+      params: { kind: "subscription", plan, promo: promoValid ? promo.trim() : "" },
+    });
   };
 
   return (
@@ -48,8 +66,32 @@ export default function PlansRoute() {
         <Text style={styles.eyebrow}>SCAN MORE, WORRY LESS</Text>
         <Text style={styles.title}>Choose your clean scan plan.</Text>
         <Text style={styles.body}>
-          Start with five complimentary scans every month. Upgrade any time for unlimited ingredient intelligence.
+          New account? You&apos;re on 3 months of unlimited scans on the house. After that, subscribe or buy credits.
         </Text>
+
+        <View style={styles.promoRow}>
+          <TextInput
+            testID="plans-promo-input"
+            value={promo}
+            onChangeText={(v) => { setPromo(v.toUpperCase()); setPromoValid(null); setPromoError(""); }}
+            placeholder="Promo code"
+            autoCapitalize="characters"
+            placeholderTextColor={colors.muted}
+            style={styles.promoInput}
+          />
+          <Pressable testID="plans-promo-apply" onPress={applyPromo} style={styles.promoButton}>
+            <Text style={styles.promoButtonText}>Apply</Text>
+          </Pressable>
+        </View>
+        {promoValid ? (
+          <Text style={styles.promoSuccess} testID="plans-promo-success">
+            Applied. {promoValid.kind === "free_scans"
+              ? `+${promoValid.bonus} free scans on your next purchase`
+              : `Discount will apply at checkout (${promoValid.kind ?? "code"})`}
+          </Text>
+        ) : promoError ? (
+          <Text style={styles.promoError} testID="plans-promo-error">{promoError}</Text>
+        ) : null}
 
         <View style={styles.card}>
           <View style={styles.badge}>
@@ -68,7 +110,7 @@ export default function PlansRoute() {
               </View>
               <Pressable
                 testID={`plan-choose-${plan.id}`}
-                onPress={() => subscribe(plan.id)}
+                onPress={() => goSubscribe(plan.id as "monthly" | "yearly")}
                 style={styles.smallButton}
               >
                 <Text style={styles.smallButtonText}>Choose</Text>
@@ -83,22 +125,14 @@ export default function PlansRoute() {
             <View style={styles.tierPill}>
               <Text style={styles.tierNumber}>{plans.symbol}{plans.scan_intro.price}</Text>
               <Text style={styles.muted}>{plans.scan_intro.label}</Text>
-              <Pressable
-                testID="buy-intro-credits"
-                onPress={() => router.push({ pathname: "/checkout", params: { credits: "10", tier: "intro" } })}
-                style={styles.buyButton}
-              >
+              <Pressable testID="buy-intro-credits" onPress={() => goBuy(10, "intro")} style={styles.buyButton}>
                 <Text style={styles.buyButtonText}>Buy 10</Text>
               </Pressable>
             </View>
             <View style={styles.tierPill}>
               <Text style={styles.tierNumber}>{plans.symbol}{plans.scan_standard.price}</Text>
               <Text style={styles.muted}>{plans.scan_standard.label}</Text>
-              <Pressable
-                testID="buy-standard-credits"
-                onPress={() => router.push({ pathname: "/checkout", params: { credits: "10", tier: "standard" } })}
-                style={styles.buyButton}
-              >
+              <Pressable testID="buy-standard-credits" onPress={() => goBuy(10, "standard")} style={styles.buyButton}>
                 <Text style={styles.buyButtonText}>Buy 10</Text>
               </Pressable>
             </View>
@@ -106,9 +140,14 @@ export default function PlansRoute() {
           <Text style={styles.disclaimer}>
             {plans.provider === "razorpay"
               ? "India pricing paid via Razorpay · UPI, cards, netbanking & wallets."
-              : "Paid via Stripe · Apple Pay available on native iOS builds."}
+              : "Non-India regions are free for now — admin will enable pricing later."}
           </Text>
         </View>
+
+        <Pressable onPress={() => Linking.openURL("https://razorpay.com/")} testID="plans-secure-note" style={styles.secureRow}>
+          <Ionicons name="shield-checkmark-outline" size={16} color={colors.muted} />
+          <Text style={styles.muted}>Payments are secured by Razorpay</Text>
+        </Pressable>
       </ScrollView>
     </View>
   );
@@ -121,7 +160,13 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   backText: { color: colors.onSurface, fontSize: 14, fontWeight: "700" },
   eyebrow: { color: colors.brandPrimary, fontSize: 11, fontWeight: "800", letterSpacing: 1.1 },
   title: { color: colors.onSurface, fontSize: 28, fontWeight: "800", marginTop: 10 },
-  body: { color: colors.onSurfaceSecondary, fontSize: 14, lineHeight: 22, marginTop: 12, marginBottom: 22 },
+  body: { color: colors.onSurfaceSecondary, fontSize: 14, lineHeight: 22, marginTop: 12, marginBottom: 20 },
+  promoRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  promoInput: { flex: 1, minHeight: 44, borderRadius: 12, backgroundColor: colors.surfaceTertiary, paddingHorizontal: 12, color: colors.onSurface, fontSize: 14 },
+  promoButton: { minWidth: 76, minHeight: 44, borderRadius: 12, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  promoButtonText: { color: colors.onBrandPrimary, fontSize: 13, fontWeight: "800" },
+  promoSuccess: { color: colors.brandPrimary, fontSize: 12, marginBottom: 12 },
+  promoError: { color: colors.error, fontSize: 12, marginBottom: 12 },
   card: { backgroundColor: colors.surfaceSecondary, borderRadius: 22, padding: 20, marginBottom: 16 },
   badge: { alignSelf: "flex-start", backgroundColor: colors.brandSecondary, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 14 },
   badgeText: { color: colors.onBrandSecondary, fontSize: 10, fontWeight: "900", letterSpacing: 0.7 },
@@ -140,4 +185,5 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   buyButton: { minHeight: 40, borderRadius: 12, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", paddingHorizontal: 14, marginTop: 10 },
   buyButtonText: { color: colors.onBrandPrimary, fontSize: 13, fontWeight: "800" },
   disclaimer: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 14, fontStyle: "italic" },
+  secureRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12 },
 }));

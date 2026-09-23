@@ -1,96 +1,70 @@
 # VeriScan — PRD & State
 
 ## Vision
-AI product-health & ingredient intelligence app for global users. Barcode scanner, ingredient-level toxicity (0–100), personalized match, watchlist, OCR fallback, admin backoffice.
+AI product-health & ingredient intelligence app for global users. Barcode scanner, ingredient-level toxicity (0–100), personalized match, watchlist, OCR fallback, admin backoffice, secure payments.
 
 ## Stack
-- **Frontend**: Expo Router (React Native), React Query, Expo Camera, Expo Image
-- **Backend**: FastAPI + MongoDB (Motor)
-- **LLM**: Claude Sonnet 4.6 via Emergent LLM Key (OCR extraction on contribution photos)
-- **Email**: Emergent-managed Resend (password reset OTP, watchlist alerts, admin reset codes)
-- **External data**: Open Food Facts + Open Beauty Facts
-- **Payments** (live): Razorpay for India (INR, test keys configured); Stripe for non-IN countries planned
+- Frontend: Expo Router (React Native), React Query, Expo Camera, react-native-webview
+- Backend: FastAPI + MongoDB (Motor)
+- LLM: Claude Sonnet 4.6 via Emergent LLM Key (multimodal OCR)
+- Email: Emergent-managed Resend (OTP, watchlist alerts, refund tickets)
+- Payments: Razorpay (India, INR); other countries FREE for now (admin can enable pricing per country)
+- External data: Open Food Facts + Open Beauty Facts
 
-### Payments (Razorpay)
-- `POST /api/payments/razorpay/order` — creates INR order in paise; unit price read server-side from `country_pricing` IN row; amount snapshotted on the order
-- `POST /api/payments/razorpay/verify` — verifies HMAC signature; credits wallet exactly once
-- `GET /api/payments/razorpay/checkout/{order_id}` — hosted checkout HTML page (WebView / web fallback), uses `callback_url` + `redirect:true`
-- `POST /api/payments/razorpay/callback` — form-redirect callback after payment; verifies signature and credits idempotently
-- `POST /api/payments/razorpay/webhook` — HMAC-SHA256 over raw body; handles `order.paid`, `payment.captured`, `subscription.*`; dedup by `x-razorpay-event-id`
-- Frontend: `app/checkout.tsx` opens the hosted page in a `WebView` on native or navigates on web. Plans screen "Buy 10" buttons wired to it
-- Unique indexes on `razorpay_order_id`, `razorpay_subscription_id`, `webhook_events.event_id` to prevent double-credit
+## Shipped through Iter 4
+### User experience
+- 3-scan guest mode (device fingerprint)
+- Email-only signup (T&C + Privacy accepted, no DOB or extra PII)
+- **3-month free trial** for every new user — unlimited scans, no card
+- Post-trial: pay-per-scan (₹5 intro / ₹15 standard) or monthly (₹72) / yearly (₹450) subscription
+- Password reset via 6-digit OTP (Resend) — admin can send a reset code but cannot see or change passwords
+- Real product lookup via Open Food Facts + Open Beauty Facts; unknown barcode → guided OCR contribution flow (Claude Sonnet 4.6) → immediate scored report (**always free**)
+- Regulatory badges chip row: FSSAI, FDA, USDA Organic, EU Bio, PETA, Leaping Bunny, Vegan Society, Trustified, Informed Sport, Kosher, Halal, Gluten-Free, Non-GMO, Green Dot (IN veg), Brown Triangle (IN non-veg); auto-detected from labels, plus admin override per product
+- Watchlist + email alerts, in-app inbox
+- Support tickets + misinformation reports
+- Better-For-You carousel of cleaner alternatives
+- Country-aware pricing: `x-country` header determines whether a scan consumes credits; non-IN countries free until admin enables pricing
 
-## Shipped (Iter 1 + 2 + 3)
-### User-facing
-- Onboarding preferences (dietary, health targets, ingredient sensitivities)
-- Guest mode with 3 free scans (device fingerprint in secure storage)
-- **T&C + Privacy Policy acceptance is mandatory on signup**; content served from `/api/legal/terms` and `/api/legal/privacy`, versioned
-- Email+password auth (bcrypt); minimal PII (only email needed)
-- **Password reset via 6-digit OTP** (10-min expiry, delivered by Resend)
-- Real product lookup via Open Food Facts / Open Beauty Facts with ingredient scoring
-- Nutrition per 100 g extracted and displayed
-- 0–100 safety spectrum (Red / Orange / Yellow / Light Green / Emerald) with color-coded chips
-- Personalized Match % — penalizes sensitivity violations
-- Ingredient bottom sheet with function, bodily impact, regulatory context
-- Nutrition per 100 g + Price benchmark card
-- **Better-For-You** carousel — 3 cleaner alternatives in same category
-- Product detail: watch-heart, report-flag, contribute-correction
-- **Watchlist** — save any product; email alert when a cleaner alt lands
-- **Notifications** (in-app inbox)
-- Scan history (registered + guest, migrated on signup)
-- **Support tickets** — user files ticket + sees status/response
-- **Misinformation reports** on any product
-- Contribution flow (5-step guided photo capture) — photos sent to Claude Sonnet 4.6 which returns structured ingredients + nutrition JSON
-- Legal screens (T&C + Privacy Policy readable in-app)
+### Payments (Razorpay, INR)
+- `POST /api/payments/razorpay/order` — pay-per-scan credits, accepts `promo_code`, applies discount/bonus
+- `POST /api/payments/razorpay/subscription` — one-time payment that activates a 30/365-day subscription
+- `POST /api/promocodes/preview` — public preview endpoint that returns the discount without creating an order
+- Hosted checkout page with signature-verified callback and idempotent crediting
+- Webhook handler (HMAC-SHA256, dedup by event id)
 
-### Admin (role-based, gated by `role === "admin"`)
-- Admin dashboard with counts (users, suspended, open tickets, open reports, products, pending contributions)
-- Users list with **masked emails**, suspend/reactivate with reason, send-reset-code
-- Support tickets: filter by status, add internal note, transition to in_progress/resolved/closed
-- Data reports: same filter + resolution workflow
-- Country pricing editor (8 countries seeded: IN, US, CA, EU, GB, AE, AU, NZ)
-- Promo codes: create (percent / flat / free_scans) with max redemptions, per-country whitelist; deactivate
-- **Admin cannot**: see plaintext passwords, edit user preferences/history, hard-delete accounts (soft-suspend only), or unmask user emails
+### Admin
+- Users (masked emails), suspend/reactivate/send-reset
+- Support tickets and misinformation reports workflows
+- Country pricing editor (all 8 countries)
+- Promo codes: create, list, deactivate (percent, flat, free_scans)
+- **Payments & refunds** — list credited payments; refund any payment (calls Razorpay refunds API, reverses credits, auto-opens a resolved support ticket)
+- **Merge duplicates** — mongo aggregation groups by lower(name, brand); admin picks the canonical barcode, others soft-marked `merged` with `merged_into` pointer; watchlist/reports/history/contributions repointed
 
-### Legal-safety features
-- Terms of Service + Privacy Policy templates (v1.0.0) explicitly disclaim medical advice, cover IP, indemnity, UGC licensing, arbitration
-- Ingredient/scoring outputs are labelled as informational, never medical
-- All scan requests trust server-side entitlement counter (no client-side quota)
-- Admin actions logged in DB (support_tickets, reports, entitlements records)
-- Email guardrails enforced via `_assert_safe_email` — blocks credential harvesting, non-https links, form fields, homoglyph impersonation
+### Legal
+- T&C + Privacy templates (versioned) served from `/api/legal/*`; users can only register after accepting both
+- Admin actions logged; passwords bcrypt-hashed; email sending guarded against phishing patterns
 
-## Pending (Iter 4+)
-- Stripe checkout for US/CA/EU/GB/AE/AU/NZ with Apple Pay
-- Wire promo code redemption at checkout
-- Product image caching via Emergent Object Storage
-- After deploy: register the Razorpay webhook at `https://<your-app>.emergent.host/api/payments/razorpay/webhook` with `RAZORPAY_WEBHOOK_SECRET` for live payments
+## API summary (additions this iteration)
+- `POST /api/promocodes/preview`
+- `POST /api/payments/razorpay/subscription`
+- `POST /api/admin/refund`
+- `GET /api/admin/payments`
+- `GET /api/admin/duplicates`
+- `POST /api/admin/products/merge`
+- `PUT /api/admin/products/{barcode}/badges`
+- `x-country` header on lookup — governs whether a scan consumes credits
 
-## API summary
-- `POST /api/auth/{register,login,forgot-password,reset-password}`
-- `GET/PUT /api/profile` · `GET /api/entitlements`
-- `GET /api/legal/terms|privacy`
-- `GET /api/products/lookup?barcode=` · `/api/products/alternatives?barcode=` · `/api/history`
-- `POST /api/contributions` (calls Claude for OCR when images attached)
-- `GET/POST/DELETE /api/watchlist[/{barcode}]` · `GET /api/notifications` · `POST /api/notifications/{id}/read`
-- `POST /api/support` · `GET /api/support/mine` · `POST /api/reports`
-- `GET /api/plans?country=` · `GET /api/promocodes/{code}`
-- `GET /api/admin/{overview,users,pricing,promocodes,support,reports,contributions}`
-- `POST /api/admin/users/{id}/{suspend,reactivate,send-reset}`
-- `PUT /api/admin/{pricing,support,reports}/{id_or_country}`
-- `POST /api/admin/promocodes` · `DELETE /api/admin/promocodes/{code}`
+## Testing
+- **Iter 6 backend regression: 44/44 pass** — trial, badges, promo discount, subscription order, admin refund path, merge duplicates, region_free lookup
 
-## Testing status
-- Iter 3 backend regression: **22/22 pass** (legal, admin RBAC, OTP reset, watchlist, alternatives, multi-country pricing, promocodes, masked-email invariant)
-- Iter 3 Razorpay payments: **11/11 pass** — order creation (₹5/₹15 tiers), signature verification, idempotent crediting, checkout page, webhook HMAC + dedup
-- Test credentials in `/app/memory/test_credentials.md`
+## Deployment notes
+- After **Publish** → Deploy, register Razorpay webhook at `https://<app>.emergent.host/api/payments/razorpay/webhook` with `RAZORPAY_WEBHOOK_SECRET`
+- Payments only need live-mode Razorpay keys before public release
+- Apple Pay / Stripe for non-IN countries is deferred; countries are currently FREE and admin can enable pricing later from the Admin → Country pricing screen
 
-## Razorpay production setup (when going live)
-1. In Razorpay Dashboard (Live Mode): generate **Live** Key ID + Key Secret
-2. Update `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` in deployment secrets
-3. Webhooks tab: add `https://<your-deployed-app>/api/payments/razorpay/webhook` with the same `RAZORPAY_WEBHOOK_SECRET`; subscribe to `order.paid`, `payment.captured`, `subscription.activated`, `subscription.charged`, `subscription.pending`, `subscription.halted`, `subscription.cancelled`
-4. Test with a real small payment and reconcile against the `payment_orders` collection
-
-## Notes for next iteration (payments)
-- `country_pricing` collection is the single source of truth — the admin panel already edits it
-- Each row includes `provider` field ('razorpay' or 'stripe') so the checkout screen can pick the right SDK
-- Multi-currency amounts already in place; iter 3 just needs SDK wiring + Apple Pay merchant setup on native build
+## Update — Price comparison + Router refactor + Preferences v2 (2026-09-23)
+- `server.py` (1653 lines) split into modular routers: `routes/{auth,profile,products,payments,admin,misc}.py` + `core/{config,models,deps,product_logic,pricing_logic}.py`. `server.py` is now a slim app factory; API surface unchanged.
+- Hybrid e-commerce price comparison: `GET /api/products/compare?barcode=X` returns category-routed retailer deep-links (Amazon IN, Flipkart, Blinkit, Zepto, Nykaa, Tata 1mg, HealthKart) always, plus live prices via QuickCommerce API + Apify when `QUICKCOMMERCE_API_KEY`/`APIFY_TOKEN` are set in backend/.env (currently placeholders). 15-min MongoDB cache (`price_cache`).
+- Frontend: `src/components/price-comparison.tsx` renders live prices (with MRP strikethrough) or deep-link buttons with "Search links"/"Live prices" chip; replaces the old static `product.retailers` block on the product page.
+- Preferences expanded (frontend options + backend scoring): dietary +Keto/High protein/Halal/Jain, targets +Low sodium/Weight management/Energy & focus, sensitivities +Sulfate-free/Dairy-free/Soy-free/Palm oil free.
+- Test suite: 49 passed / 10 failed — all 10 failures are stale iteration 1-3 tests (register without T&C versions, barcode 9999999999999 polluted into DB by old contribution tests). Same failures exist on pre-refactor code (18 failed there).

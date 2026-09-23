@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 4 change-set (3-month free trial replaces monthly-free-scans; orders/admin_payments visibility incl. verify-with-fake-sig) fully verified — backend only. New test file /app/backend/tests/test_iteration_6_trial.py added: 11/11 pass. Full regression against previous iterations: 33/33 (iter_4=22 + iter_5=11) also pass — total 44/44 green. Covered: (1) new users get trial_expires_at ≈ now+90d in Mongo; (2) /api/entitlements returns trial_active=true, trial_days_remaining≈89, wallet=0, free_remaining=0 (monthly-free-scans no longer leaks for registered users); (3) guests still get free_remaining=3 with trial_active=false; (4) scans during trial do NOT decrement purchased_balance (seeded wallet=5 stays 5 after 2 scans); (5) expired trial + wallet=2 → scan decrements wallet to 1 and entitlements report trial_active=false, trial_days_remaining=0; (6) expired trial + wallet=0 → 402 with message referencing trial ended; (7) /api/admin/payments only lists credited=true rows — a freshly created (uncredited) order is hidden; (8) /api/payments/razorpay/verify with a bogus signature returns 400, does NOT flip credited, does NOT credit the wallet, and the order does NOT surface in /admin/payments; (9) verify against a non-existent order_id returns 404; (10) /api/admin/payments requires admin (403 for regular user); (11) end-to-end happy path: valid HMAC signature (computed with RAZORPAY_KEY_SECRET) credits +10 to wallet and the order appears in /admin/payments with credited=true and credits=10.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/entitlements", "issue": "free_remaining is hard-coded to 0 for registered users (server.py:639). This is intentional after the trial-based model change but be aware clients still reading `free_remaining` will always see 0 — trial_active + trial_days_remaining are now the source of truth."},
+      {"endpoint": "consume_scan", "issue": "The per-user entitlement doc is still bootstrapped with the legacy `free_month`/`free_used`/`intro_used` fields (server.py:290-292, 540-543) even though they are unused by the trial flow. Consider removing to avoid confusion; harmless today."},
+      {"endpoint": "POST /api/auth/register", "issue": "trial_expires_at is stored as an ISO string, not a datetime — parsing happens on every /entitlements + /products/lookup call (server.py:298-303, 628-636). Minor perf/consistency nit; consider storing datetime."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_6_trial.py",
+    "/app/test_reports/pytest/iteration_6.xml"
+  ],
+  "action_items": [
+    "None required for this iteration — all trial + admin_payments guarantees hold.",
+    "Optional cleanup: drop the legacy free_month/free_used/intro_used fields from entitlements bootstrap now that monthly-free-scans is deprecated.",
+    "Optional: server.py is at 1653 lines — still well past the 700-line guideline. Splitting payments, admin and auth into modules would ease future maintenance."
+  ],
+  "critical_code_review_comments": [
+    "consume_scan (server.py:286-318) correctly gates on trial_expires_at BEFORE touching purchased_balance — no wallet decrement while trial is active. Confirmed with a seeded wallet=5 and 2 scans staying at 5.",
+    "entitlements endpoint (server.py:621-649) computes trial_days_remaining via floor of remaining seconds/86400 — new user shows ~89 days, which matches spec (90 minus <1 day).",
+    "admin_payments (server.py:1193-1196) filters {credited: True}. Verified by creating an order and confirming it is absent, then valid-verify and confirming it appears.",
+    "razorpay_verify (server.py:1286-1303) validates signature via the Razorpay SDK utility BEFORE credit_if_new — fake sigs raise 400 with no side effects. credit_if_new (server.py:856) already uses atomic guard to prevent double crediting.",
+    "server.py file size (1653 lines) exceeds the 700-line guideline and should be split into modules for maintainability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_6_trial.py",
+    "/app/test_reports/pytest/iteration_6.xml",
+    "/app/test_reports/iteration_6.json"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 new + 33/33 regression = 44/44)",
+    "frontend": "N/A (backend-only per request)"
+  },
+  "seed_data_creation": "Transient TEST_* users created via /api/auth/register (prefix test_trial_* and test_order_*/test_creditflow_/test_np_). Mongo mutations: forced two users' trial_expires_at into the past to exercise expiry paths; seeded purchased_balance on three users. One real Razorpay test-mode order + one credited order created via the SDK. No production/seed data modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New tests live at /app/backend/tests/test_iteration_6_trial.py. Run with `EXPO_BACKEND_URL=<public url> pytest backend/tests/test_iteration_6_trial.py -v` (the file falls back to EXPO_PUBLIC_BACKEND_URL). Mongo direct access hits mongodb://localhost:27017/test_database. Emails are lowercased server-side — always look up test users by email.lower(). Valid Razorpay signatures for /verify are computed as hmac.new(RAZORPAY_KEY_SECRET, f'{order_id}|{payment_id}'.encode(), sha256).hexdigest(). The full regression suite (iter_4 + iter_5 + iter_6) is 44 tests and runs in ~15s.",
+  "rca_of_issue": "No bugs found. The iteration-4 change-set is correctly implemented: (a) trial provisioning at registration writes trial_expires_at = now+90d and is honored by consume_scan and /entitlements without ever burning wallet credits, (b) trial expiry falls through to the wallet balance and finally to a clean 402, (c) /admin/payments strictly filters credited=true so orders sitting in 'created' state (including those that failed signature verification) never leak into the admin's view of successful revenue."
+}

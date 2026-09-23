@@ -1,7 +1,13 @@
-export const DIETARY_OPTIONS = ["Vegan", "Vegetarian", "Pescatarian", "Whole foods"] as const;
-export const TARGET_OPTIONS = ["Clean eating", "Low sugar", "Low carb", "Gut health", "Heart health"] as const;
+export const DIETARY_OPTIONS = [
+  "Vegan", "Vegetarian", "Pescatarian", "Whole foods", "Keto", "High protein", "Halal", "Jain",
+] as const;
+export const TARGET_OPTIONS = [
+  "Clean eating", "Low sugar", "Low carb", "Low sodium", "Gut health", "Heart health",
+  "Weight management", "Energy & focus",
+] as const;
 export const SENSITIVITY_OPTIONS = [
-  "No additives", "Paraben-free", "Fragrance-free", "Cruelty-free", "Nut-free", "Gluten-free",
+  "No additives", "Paraben-free", "Sulfate-free", "Fragrance-free", "Cruelty-free",
+  "Nut-free", "Dairy-free", "Gluten-free", "Soy-free", "Palm oil free",
 ] as const;
 
 export type Preferences = {

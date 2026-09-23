@@ -173,6 +173,16 @@ def personalized_match(product: Dict[str, Any], preferences: Dict[str, List[str]
             checks.append(dietary_type != "non_vegetarian" or "fish" in ingredients_text)
         elif "whole" in want:
             checks.append(any(word in ingredients_text or word in labels for word in CLEAN_KEYWORDS))
+        elif want == "keto":
+            carbs = ((product.get("nutrition_per_100g") or {}).get("carbohydrates_g") or 0)
+            checks.append(carbs < 10)
+        elif "protein" in want:
+            protein = ((product.get("nutrition_per_100g") or {}).get("protein_g") or 0)
+            checks.append(protein >= 12)
+        elif want == "halal":
+            checks.append("halal" in labels)
+        elif want == "jain":
+            checks.append(not any(w in ingredients_text for w in ("onion", "garlic", "potato", "egg", "meat")))
         else:
             checks.append(True)
 
@@ -191,6 +201,15 @@ def personalized_match(product: Dict[str, Any], preferences: Dict[str, List[str]
             checks.append(any(k in ingredients_text for k in ("probiotic", "prebiotic", "fiber", "yogurt")))
         elif "clean" in want:
             checks.append(min(scores) >= 30 and any(w in ingredients_text or w in labels for w in CLEAN_KEYWORDS))
+        elif "sodium" in want:
+            salt = ((product.get("nutrition_per_100g") or {}).get("salt_g") or 0)
+            checks.append(salt < 1.2)
+        elif "weight" in want:
+            energy = ((product.get("nutrition_per_100g") or {}).get("energy_kcal") or 0)
+            sugars_w = ((product.get("nutrition_per_100g") or {}).get("sugars_g") or 0)
+            checks.append(energy < 400 and sugars_w < 8)
+        elif "energy" in want or "focus" in want:
+            checks.append(not any(w in ingredients_text for w in ("trans fat", "high fructose", "corn syrup")))
         else:
             checks.append(True)
 
@@ -208,6 +227,14 @@ def personalized_match(product: Dict[str, Any], preferences: Dict[str, List[str]
             ok = "gluten-free" in labels or "wheat" not in ingredients_text
         elif "nut" in want:
             ok = not any(n in ingredients_text for n in ("almond", "cashew", "peanut", "walnut", "hazelnut"))
+        elif "sulfate" in want or "sulphate" in want:
+            ok = not any(w in ingredients_text for w in ("sulfate", "sulphate", "lauryl", "laureth"))
+        elif "dairy" in want:
+            ok = not any(w in ingredients_text for w in ("milk", "lactose", "whey", "casein", "ghee", "cream"))
+        elif "soy" in want:
+            ok = "soy" not in ingredients_text and "soya" not in ingredients_text
+        elif "palm" in want:
+            ok = "palm" not in ingredients_text
         else:
             ok = True
         checks.append(ok)

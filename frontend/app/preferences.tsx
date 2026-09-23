@@ -46,7 +46,7 @@ export default function PreferencesRoute() {
     try { await api.saveProfile(preferences); } catch { /* offline */ }
     await queryClient.invalidateQueries({ queryKey: ["profile"] });
     setSaving(false);
-    router.back();
+    if (router.canGoBack()) router.back(); else router.replace("/(tabs)/profile");
   };
 
   return (
