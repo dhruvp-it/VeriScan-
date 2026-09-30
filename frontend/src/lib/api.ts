@@ -76,6 +76,10 @@ export type Promocode = {
   code: string; kind: string; value: number; max_redemptions: number;
   countries: string[]; expires_at: string | null; active: boolean; redemptions: number;
 };
+export type LaunchOffer = {
+  active: boolean; launched_at: string | null;
+  eligibility_ends_at: string | null; free_days: number;
+};
 
 type RequestOptions = RequestInit & { guestId?: string };
 
@@ -152,6 +156,12 @@ export const api = {
   // Legal
   terms: () => request<Legal>("/legal/terms"),
   privacy: () => request<Legal>("/legal/privacy"),
+
+  // Launch offer
+  launchOffer: () => request<LaunchOffer>("/launch-offer"),
+  adminLaunchOffer: () => request<LaunchOffer & { live: boolean }>("/admin/launch-offer"),
+  adminUpdateLaunchOffer: (payload: { active?: boolean; eligibility_ends_at?: string; free_days?: number }) =>
+    request<LaunchOffer & { live: boolean }>("/admin/launch-offer", { method: "PUT", body: JSON.stringify(payload) }),
 
   // Products
   lookup: (barcode: string) => request<Product>(`/products/lookup?barcode=${encodeURIComponent(barcode)}`),

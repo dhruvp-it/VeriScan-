@@ -108,3 +108,11 @@ Data is retained indefinitely (no PII → no retention duty). If the user later 
 - ✅ Regulatory badges (FSSAI/FDA/PETA/Vegan Society etc.)
 - ⏭ Stripe live key → drop into backend/.env
 - ⏭ SMS OTP for admin phone verification → add Twilio or MSG91 keys
+
+## Launch offer (2026-09-30)
+**Goal:** celebrate launch — every new download gets **1 year free, unlimited scans, no payment method required**; eligibility window open **3 months** from launch, admin-extendable.
+- `core/settings.py` — `app_settings.launch_offer` doc `{active, launched_at, eligibility_ends_at, free_days:365}`; seeded on startup (window = launch + 90 days). `trial_days_for_signup()` returns 365 while offer live, else 90.
+- `routes/launch.py` — `GET /api/launch-offer` (public), `GET/PUT /api/admin/launch-offer` (admin: toggle active, extend eligibility_ends_at, set free_days 1–3650).
+- Registration (`routes/auth.py`) sets `trial_expires_at = now + trial_days_for_signup()`.
+- Frontend: `src/components/launch-welcome.tsx` first-launch celebratory modal (flag `veriscan_launch_welcome_seen`); Home banner while live; admin screen `/admin/launch-offer` (toggle, +1/+3/+6mo extend, end-now, free-duration stepper + presets).
+- Verified: new signup → 365-day trial; admin GET/PUT ok; non-admin 401; welcome screen renders.

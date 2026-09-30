@@ -1,10 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useEntitlement } from "@/src/hooks/use-entitlement";
+import { api } from "@/src/lib/api";
 import { makeStyles, useTheme } from "@/src/theme";
+
+function offerMonths(days: number): number {
+  return Math.round(days / 30);
+}
 
 export default function HomeTab() {
   const styles = useStyles();
@@ -12,6 +18,7 @@ export default function HomeTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { data: entitlement } = useEntitlement();
+  const { data: offer } = useQuery({ queryKey: ["launch-offer"], queryFn: () => api.launchOffer(), staleTime: 1000 * 60 * 60 });
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -47,6 +54,18 @@ export default function HomeTab() {
             <Ionicons name="scan-outline" size={18} color={colors.brandPrimary} />
           </Pressable>
         </View>
+
+        {offer?.active ? (
+          <View style={styles.launchBanner} testID="home-launch-banner">
+            <View style={styles.launchIcon}>
+              <Ionicons name="gift" size={20} color={colors.onBrandPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.launchTitle}>Launch offer · {offerMonths(offer.free_days)} months free</Text>
+              <Text style={styles.launchBody}>Unlimited scans, no payment needed. Enjoy!</Text>
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.quotaCard} testID="quota-card">
           <View>
@@ -110,6 +129,10 @@ const useStyles = makeStyles((colors) => StyleSheet.create({
   heroButton: { alignSelf: "flex-start", minHeight: 44, marginTop: 22, paddingHorizontal: 16, borderRadius: 15, backgroundColor: colors.surface, flexDirection: "row", alignItems: "center", gap: 9 },
   heroButtonText: { color: colors.brandPrimary, fontWeight: "800", fontSize: 14 },
   quotaCard: { borderRadius: 20, backgroundColor: colors.surfaceSecondary, padding: 20, flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 26 },
+  launchBanner: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 18, backgroundColor: colors.brandTertiary, padding: 14, marginBottom: 16 },
+  launchIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
+  launchTitle: { color: colors.onSurface, fontSize: 14, fontWeight: "800" },
+  launchBody: { color: colors.muted, fontSize: 12, marginTop: 2 },
   label: { color: colors.muted, fontSize: 11, fontWeight: "800", letterSpacing: 0.8 },
   quotaNumber: { color: colors.onSurface, fontSize: 42, fontWeight: "800", marginTop: 4 },
   muted: { color: colors.muted, fontSize: 13, lineHeight: 19 },

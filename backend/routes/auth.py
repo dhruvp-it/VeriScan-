@@ -12,6 +12,7 @@ from core.deps import now_iso, token_for
 from core.models import (
     AuthRequest, LoginRequest, PasswordResetComplete, PasswordResetStart,
 )
+from core.settings import trial_days_for_signup
 from emailer import render_otp_email, send_email
 from legal_content import (
     EFFECTIVE_DATE, PRIVACY_POLICY, PRIVACY_VERSION, TERMS_OF_SERVICE, TERMS_VERSION,
@@ -47,6 +48,7 @@ async def register(payload: AuthRequest, x_guest_id: Optional[str] = Header(defa
         guest = await db.guests.find_one({"guest_id": x_guest_id}, {"_id": 0})
         if guest and guest.get("preferences"):
             preferences = guest["preferences"]
+    trial_days = await trial_days_for_signup()
     user = {
         "id": str(uuid.uuid4()), "email": email,
         "password_hash": bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt()).decode(),
@@ -54,7 +56,7 @@ async def register(payload: AuthRequest, x_guest_id: Optional[str] = Header(defa
         "suspended": False,
         "terms_accepted": {"version": TERMS_VERSION, "at": now_iso()},
         "privacy_accepted": {"version": PRIVACY_VERSION, "at": now_iso()},
-        "trial_expires_at": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(),
+        "trial_expires_at": (datetime.now(timezone.utc) + timedelta(days=trial_days)).isoformat(),
         "created_at": now_iso(),
     }
     await db.users.insert_one(user.copy())
