@@ -2,12 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AuthModal } from "@/src/components/auth-modal";
 import { useEntitlement } from "@/src/hooks/use-entitlement";
-import { TOKEN_KEY } from "@/src/lib/api";
+import { api, TOKEN_KEY } from "@/src/lib/api";
 import { makeStyles, useTheme } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 
@@ -19,10 +19,38 @@ export default function ProfileTab() {
   const queryClient = useQueryClient();
   const { data: entitlement } = useEntitlement();
   const [authOpen, setAuthOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const signOut = async () => {
     await storage.secureRemove(TOKEN_KEY);
     await queryClient.invalidateQueries();
+  };
+
+  const confirmDelete = () => {
+    Alert.alert(
+      "Delete account?",
+      "This permanently deletes your account, scan history, watchlist and preferences. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setDeleting(true);
+              await api.deleteAccount();
+              await storage.secureRemove(TOKEN_KEY);
+              await queryClient.invalidateQueries();
+              router.replace("/");
+            } catch {
+              Alert.alert("Couldn't delete account", "Please try again in a moment.");
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -120,6 +148,16 @@ export default function ProfileTab() {
           <Pressable testID="profile-sign-out" onPress={signOut} style={styles.rowLink}>
             <Ionicons name="log-out-outline" size={20} color={colors.error} />
             <Text style={[styles.rowLinkText, { color: colors.error }]}>Sign out</Text>
+            <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+          </Pressable>
+        )}
+
+        {entitlement?.registered && (
+          <Pressable testID="profile-delete-account" onPress={confirmDelete} disabled={deleting} style={styles.rowLink}>
+            <Ionicons name="trash-outline" size={20} color={colors.error} />
+            <Text style={[styles.rowLinkText, { color: colors.error }]}>
+              {deleting ? "Deleting…" : "Delete account"}
+            </Text>
             <Ionicons name="chevron-forward" size={17} color={colors.muted} />
           </Pressable>
         )}

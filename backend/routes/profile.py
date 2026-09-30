@@ -73,6 +73,24 @@ async def save_profile(payload: ProfileRequest, authorization: Optional[str] = H
     return preferences
 
 
+@router.delete("/profile")
+async def delete_account(authorization: Optional[str] = Header(default=None)) -> Dict[str, str]:
+    """Permanently deletes the current user and their personal data.
+    Required for App Store / GDPR-style in-app account deletion."""
+    user = await authenticated_user(authorization)
+    uid = user["id"]
+    email = user["email"]
+    await db.users.delete_one({"id": uid})
+    await db.entitlements.delete_many({"user_id": uid})
+    await db.history.delete_many({"user_id": uid})
+    await db.watchlist.delete_many({"user_id": uid})
+    await db.notifications.delete_many({"user_id": uid})
+    await db.support_tickets.delete_many({"user_id": uid})
+    await db.password_resets.delete_many({"email": email})
+    await db.auth_throttle.delete_one({"_id": email})
+    return {"status": "deleted"}
+
+
 @router.get("/entitlements")
 async def entitlements(authorization: Optional[str] = Header(default=None), x_guest_id: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     if authorization:

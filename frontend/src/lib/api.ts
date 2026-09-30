@@ -124,6 +124,7 @@ export const api = {
   // Profile
   profile: () => request<Profile>("/profile"),
   saveProfile: (preferences: Preferences) => request<Preferences>("/profile", { method: "PUT", body: JSON.stringify(preferences) }),
+  deleteAccount: () => request<{ status: string }>("/profile", { method: "DELETE" }),
   entitlements: () => request<Entitlement>("/entitlements"),
   termsStatus: () => request<{ registered: boolean; up_to_date: boolean; terms_version: string; privacy_version: string; accepted_terms_version?: string; accepted_privacy_version?: string }>("/profile/terms-status"),
   acceptTerms: () => request<{ status: string; terms_version: string; privacy_version: string }>("/profile/accept-terms", { method: "POST" }),
