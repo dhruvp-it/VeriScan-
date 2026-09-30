@@ -17,7 +17,11 @@ LogBox.ignoreAllLogs(true);
 async function ensureGuestId() {
   const existing = await storage.secureGet(GUEST_KEY, "");
   if (existing) return;
-  const generated = `guest-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  // High-entropy, unguessable identifier — a guest's scan history is keyed by it.
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let token = "";
+  for (let i = 0; i < 40; i += 1) token += alphabet[Math.floor(Math.random() * alphabet.length)];
+  const generated = `guest-${Date.now().toString(36)}-${token}`;
   await storage.secureSet(GUEST_KEY, generated);
 }
 

@@ -187,7 +187,6 @@ export const api = {
   // Plans & payments
   plans: (country?: string) => request<PlansResponse>(`/plans${country ? `?country=${country}` : ""}`),
   promocode: (code: string, country?: string) => request<Promocode>(`/promocodes/${encodeURIComponent(code)}${country ? `?country=${country}` : ""}`),
-  subscription: (plan: string, country?: string) => request<{ url: string }>("/payments/subscription-session", { method: "POST", body: JSON.stringify({ plan, country }) }),
   razorpayOrder: (credits: number, tier: "intro" | "standard", promoCode?: string) =>
     request<{ key_id: string; order_id: string; amount: number; base_amount: number; discount: number; bonus_credits: number; currency: string; description: string }>(
       "/payments/razorpay/order", { method: "POST", body: JSON.stringify({ credits, tier, promo_code: promoCode }) },

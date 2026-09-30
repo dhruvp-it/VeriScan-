@@ -3,13 +3,11 @@ import asyncio
 import hashlib
 import hmac
 import json
-import os
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
@@ -19,7 +17,7 @@ from core.config import (
 from core.deps import admin_user, authenticated_user, now_iso
 from core.models import (
     AdminRefundIn, ProductBadgesIn, ProductMergeIn, RazorpayOrderIn,
-    RazorpaySubscriptionIn, RazorpayVerifyIn, SubscriptionPurchase,
+    RazorpaySubscriptionIn, RazorpayVerifyIn,
 )
 from core.pricing_logic import apply_promo, credit_if_new, india_price_paise
 from legal_content import PRIVACY_VERSION, TERMS_VERSION
@@ -470,23 +468,3 @@ async def razorpay_webhook(request: Request) -> Dict[str, bool]:
             {"$set": {"status": event.replace("subscription.", "")}},
         )
     return {"ok": True}
-
-
-@router.post("/payments/subscription-session")
-async def subscription_session(payload: SubscriptionPurchase, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-    user = await authenticated_user(authorization)
-    if payload.plan not in {"monthly", "yearly"}:
-        raise HTTPException(400, "Invalid subscription plan")
-    if not os.environ.get("STRIPE_SECRET_KEY") and not os.environ.get("STRIPE_API_KEY"):
-        raise HTTPException(503, "Payments are not configured yet")
-    price_id = os.environ.get("STRIPE_MONTHLY_PRICE_ID" if payload.plan == "monthly" else "STRIPE_YEARLY_PRICE_ID")
-    if not price_id:
-        raise HTTPException(503, "Subscription prices are not configured yet")
-    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY") or os.environ["STRIPE_API_KEY"]
-    session = stripe.checkout.Session.create(
-        mode="subscription", line_items=[{"price": price_id, "quantity": 1}],
-        success_url=os.environ.get("STRIPE_CHECKOUT_SUCCESS_URL", "https://example.com/success"),
-        cancel_url=os.environ.get("STRIPE_CHECKOUT_CANCEL_URL", "https://example.com/cancel"),
-        metadata={"user_id": user["id"], "plan": payload.plan},
-    )
-    return {"url": session.url, "sessionId": session.id}

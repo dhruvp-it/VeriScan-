@@ -14,7 +14,14 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "veriscan-local-development-secret")
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if len(JWT_SECRET.encode()) < 32 or JWT_SECRET.lower() in {
+    "secret", "change-me", "changeme", "veriscan-local-development-secret",
+}:
+    raise RuntimeError(
+        "JWT_SECRET is missing or too weak. Set a strong, unique JWT_SECRET "
+        "(>= 32 chars) in backend/.env before starting the server."
+    )
 TOKEN_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 ADMIN_SEED_EMAIL = os.environ.get("ADMIN_SEED_EMAIL", "admin@veriscan.app").strip().lower()

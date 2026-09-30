@@ -98,6 +98,14 @@ async def track(payload: TrackEvent) -> Dict[str, str]:
     return {"status": "recorded"}
 
 
+def _csv_safe(value: Any) -> Any:
+    """Neutralize CSV formula injection — prefix a quote to any cell that a
+    spreadsheet would interpret as a formula (leading = + - @, tab, or CR)."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def _date_range(days: int) -> List[str]:
     today = datetime.now(timezone.utc).date()
     return [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)][::-1]
@@ -204,8 +212,10 @@ async def analytics_export(_: Dict[str, Any] = Depends(admin_user), days: int = 
     writer.writerow(["date", "event", "key", "count", "category", "retailer_id", "barcode"])
     for row in rows:
         writer.writerow([
-            row.get("date", ""), row.get("event", ""), row.get("key", ""), row.get("count", 0),
-            row.get("category", ""), row.get("retailer_id", ""), row.get("barcode", ""),
+            _csv_safe(row.get("date", "")), _csv_safe(row.get("event", "")),
+            _csv_safe(row.get("key", "")), row.get("count", 0),
+            _csv_safe(row.get("category", "")), _csv_safe(row.get("retailer_id", "")),
+            _csv_safe(row.get("barcode", "")),
         ])
     buffer.seek(0)
     filename = f"veriscan-analytics-{date.today().isoformat()}.csv"

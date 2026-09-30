@@ -116,3 +116,8 @@ Data is retained indefinitely (no PII → no retention duty). If the user later 
 - Registration (`routes/auth.py`) sets `trial_expires_at = now + trial_days_for_signup()`.
 - Frontend: `src/components/launch-welcome.tsx` first-launch celebratory modal (flag `veriscan_launch_welcome_seen`); Home banner while live; admin screen `/admin/launch-offer` (toggle, +1/+3/+6mo extend, end-now, free-duration stepper + presets).
 - Verified: new signup → 365-day trial; admin GET/PUT ok; non-admin 401; welcome screen renders.
+
+## Security audit remediation (2026-09-30) — 20/20 verified
+- **SEC-001 CRITICAL (fixed)**: `JWT_SECRET` now loaded strictly from env with fail-fast on weak/missing/default (`core/config.py`); strong secret added to `backend/.env`. Old sessions invalidated (users re-login once).
+- **SEC-002 MEDIUM (fixed)**: CSV formula-injection neutralized in `/admin/analytics/export` via `_csv_safe()` (`routes/analytics.py`).
+- **Hardening**: login brute-force account lockout (5 fails → 15-min lock) + constant-time bcrypt dummy hash (`routes/auth.py`, `auth_throttle` collection); password-reset OTP now bcrypt-hashed at rest, single-use, max-5-attempts, 10-min expiry (`core/otp.py`, auth + admin send-reset); CORS `allow_credentials=False` (`server.py`); admin user-search regex `re.escape`d; guest-id upgraded to high-entropy token (`_layout.tsx`); removed unused `/payments/subscription-session` shadow endpoint. Testing agent: 20/20 pass, no regressions (`test_reports/iteration_10.json`).

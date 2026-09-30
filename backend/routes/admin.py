@@ -1,5 +1,7 @@
 """Admin dashboard routes — overview, users, pricing, promocodes, support."""
 import random
+import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.config import db
 from core.deps import admin_user, mask_email, now_iso
 from core.models import AdminPricingUpdate, AdminPromocode, SupportUpdate, UserSuspendRequest
+from core.otp import hash_otp
 from emailer import render_admin_reset_link, send_email
 
 router = APIRouter()
@@ -29,7 +32,7 @@ async def admin_overview(_: Dict[str, Any] = Depends(admin_user)) -> Dict[str, i
 async def admin_users(_: Dict[str, Any] = Depends(admin_user), q: Optional[str] = None) -> List[Dict[str, Any]]:
     query: Dict[str, Any] = {"role": {"$ne": "admin"}}
     if q:
-        query["email"] = {"$regex": q.lower(), "$options": "i"}
+        query["email"] = {"$regex": re.escape(q.lower()), "$options": "i"}
     users = await db.users.find(query, {"_id": 0, "password_hash": 0, "preferences": 0}).sort("created_at", -1).to_list(200)
     return [{
         "id": u["id"], "email_masked": mask_email(u["email"]),
@@ -61,10 +64,13 @@ async def admin_send_reset(user_id: str, _: Dict[str, Any] = Depends(admin_user)
     if not user:
         raise HTTPException(404, "User not found")
     otp = f"{random.randint(0, 999999):06d}"
+    await db.password_resets.update_many(
+        {"email": user["email"], "used": {"$ne": True}}, {"$set": {"used": True}},
+    )
     await db.password_resets.insert_one({
-        "email": user["email"], "otp": otp,
+        "id": str(uuid.uuid4()), "email": user["email"], "otp_hash": hash_otp(otp),
         "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
-        "created_at": now_iso(),
+        "created_at": now_iso(), "attempts": 0, "used": False,
     })
     subject, html = render_admin_reset_link(otp, user["email"])
     await send_email(to=user["email"], subject=subject, html=html)

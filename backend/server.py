@@ -36,7 +36,7 @@ for router in (auth_router, profile_router, products_router, payments_router,
                admin_profile_router, launch_router):
     app.include_router(router, prefix="/api")
 
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 @app.on_event("startup")
